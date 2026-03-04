@@ -146,6 +146,22 @@ FB_RELAX_DURATION_SEC: float = 180.0
 FB_RECHARGE_BOOST_DURATION_SEC: float = 120.0
 FB_REASSIGN_MODE: str = "soft"  # "soft" | "hard"
 
+# Step10 failure + robust-response parameters
+ENABLE_FAILURES: bool = False
+FAILURE_MODE: str = "scheduled"  # "scheduled" | "random"
+FAILURE_T_SEC: float = 600.0  # seconds
+FAILURE_USV_ID: int = 1
+FAILURE_KIND: str = "DISABLED"  # "DAMAGED" | "DISABLED"
+DAMAGE_SPEED_SCALE: float = 0.6
+DAMAGE_TURN_SCALE: float = 0.7
+DAMAGE_CHARGE_SCALE: float = 0.5
+FAILURE_RANDOM_PROB_PER_SEC: float = 0.0005
+FAILURE_RECOVERY: bool = False
+FAILURE_EVENT_COOLDOWN: float = 999999.0
+ENABLE_ROBUST_RESPONSE: bool = True
+FORCED_RELAX_ON_FAILURE: bool = True
+FORCED_RELAX_DURATION_SEC: float = 300.0
+
 
 @dataclass
 class SimConfig:
@@ -249,6 +265,20 @@ class SimConfig:
     fb_relax_duration_sec: float = FB_RELAX_DURATION_SEC
     fb_recharge_boost_duration_sec: float = FB_RECHARGE_BOOST_DURATION_SEC
     fb_reassign_mode: str = FB_REASSIGN_MODE
+    enable_failures: bool = ENABLE_FAILURES
+    failure_mode: str = FAILURE_MODE
+    failure_t_sec: float = FAILURE_T_SEC
+    failure_usv_id: int = FAILURE_USV_ID
+    failure_kind: str = FAILURE_KIND
+    damage_speed_scale: float = DAMAGE_SPEED_SCALE
+    damage_turn_scale: float = DAMAGE_TURN_SCALE
+    damage_charge_scale: float = DAMAGE_CHARGE_SCALE
+    failure_random_prob_per_sec: float = FAILURE_RANDOM_PROB_PER_SEC
+    failure_recovery: bool = FAILURE_RECOVERY
+    failure_event_cooldown: float = FAILURE_EVENT_COOLDOWN
+    enable_robust_response: bool = ENABLE_ROBUST_RESPONSE
+    forced_relax_on_failure: bool = FORCED_RELAX_ON_FAILURE
+    forced_relax_duration_sec: float = FORCED_RELAX_DURATION_SEC
     runs_dir: str = "runs"
     run_name: str | None = None
 

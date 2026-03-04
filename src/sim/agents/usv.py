@@ -28,9 +28,65 @@ class USVAgent(BaseAgent):
         self.turn_rate_deg = turn_rate_deg
         self.heading = heading
         self.charge_rate = max(0.0, charge_rate)
-        self.can_charge = True
+        self.base_max_speed = max(0.0, max_speed)
+        self.base_turn_rate_deg = max(0.0, turn_rate_deg)
+        self.base_charge_rate = max(0.0, charge_rate)
+        self.health_state = "OK"  # OK | DAMAGED | DISABLED
+        self.health_time = -math.inf
+        self.charge_enabled = True
         self.charging_slots = 1
         self.charging_uav_id: str | None = None
+
+    def is_operational(self) -> bool:
+        return self.health_state in ("OK", "DAMAGED")
+
+    def can_move(self) -> bool:
+        return self.health_state in ("OK", "DAMAGED")
+
+    def can_monitor(self) -> bool:
+        return self.health_state in ("OK", "DAMAGED")
+
+    def can_charge(self) -> bool:
+        return self.charge_enabled and self.health_state in ("OK", "DAMAGED")
+
+    def set_health_state(
+        self,
+        health_state: str,
+        t: float,
+        *,
+        damage_speed_scale: float = 0.6,
+        damage_turn_scale: float = 0.7,
+        damage_charge_scale: float = 0.5,
+    ) -> None:
+        state = health_state.upper()
+        if state not in ("OK", "DAMAGED", "DISABLED"):
+            raise ValueError(f"unsupported USV health state: {health_state}")
+
+        self.health_state = state
+        self.health_time = float(t)
+        self.charging_uav_id = None
+
+        if state == "OK":
+            self.max_speed = self.base_max_speed
+            self.turn_rate_deg = self.base_turn_rate_deg
+            self.charge_rate = self.base_charge_rate
+            self.charge_enabled = True
+            return
+
+        if state == "DAMAGED":
+            self.max_speed = self.base_max_speed * max(0.0, float(damage_speed_scale))
+            self.turn_rate_deg = self.base_turn_rate_deg * max(0.0, float(damage_turn_scale))
+            self.charge_rate = self.base_charge_rate * max(0.0, float(damage_charge_scale))
+            self.charge_enabled = self.charge_rate > 1e-9
+            return
+
+        # DISABLED
+        self.max_speed = 0.0
+        self.turn_rate_deg = 0.0
+        self.charge_rate = 0.0
+        self.charge_enabled = False
+        self.vel = (0.0, 0.0)
+        self.task_status = "idle"
 
     def step_toward(
         self,
@@ -41,6 +97,11 @@ class USVAgent(BaseAgent):
         current_effect: float,
         avoidance_angles_deg: tuple[float, ...],
     ) -> None:
+        if not self.can_move():
+            self.vel = (0.0, 0.0)
+            self.task_status = "idle"
+            return
+
         old_pos = self.pos
         desired = math.atan2(target_pos[1] - self.pos[1], target_pos[0] - self.pos[0])
         max_turn = math.radians(self.turn_rate_deg) * dt

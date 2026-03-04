@@ -18,7 +18,11 @@ class FeedbackMonitor:
         assigned_count = len(sim_state.tasks.get_assigned_tasks(task_type="monitor"))
         done_count = len([task for task in sim_state.tasks.all_tasks(task_type="monitor") if task.status == "done"])
         uavs = sim_state._uavs()
+        usvs = sim_state._usvs()
         battery_fracs = [float(uav.battery_frac) for uav in uavs] if uavs else [0.0]
+        num_disabled = sum(1 for usv in usvs if usv.health_state == "DISABLED")
+        num_damaged = sum(1 for usv in usvs if usv.health_state == "DAMAGED")
+        num_can_charge = sum(1 for usv in usvs if usv.can_charge())
 
         metrics = {
             "t": float(t),
@@ -33,6 +37,10 @@ class FeedbackMonitor:
             "uav_battery_mean": float(sum(battery_fracs) / len(battery_fracs)) if battery_fracs else 0.0,
             "usv_preference_hit_rate": float(sim_state.usv_preference_hit_rate()),
             "usv_cross_band_ratio": float(sim_state.usv_cross_band_ratio()),
+            "num_usv_disabled": float(num_disabled),
+            "num_usv_damaged": float(num_damaged),
+            "num_usv_total": float(len(usvs)),
+            "num_usv_can_charge": float(num_can_charge),
         }
         self.recent_metrics.append(metrics)
         if len(self.recent_metrics) > self.max_recent:
@@ -46,6 +54,7 @@ class FeedbackController:
         self.cooldown_until: dict[str, float] = {}
         self.reason_cooldown_until: dict[tuple[str, str], float] = {}
         self.recent_metrics: list[dict[str, float]] = []
+        self.prev_num_usv_disabled = 0.0
 
     def step(self, metrics: dict[str, float], sim_state: Any) -> list[dict[str, Any]]:
         t = float(metrics["t"])
@@ -61,8 +70,57 @@ class FeedbackController:
             metrics["uav_battery_mean"] < float(self.config.fb_energy_pressure_batt)
             or metrics["uav_battery_min"] < 0.25
         )
+        disabled_now = float(metrics.get("num_usv_disabled", 0.0))
+        disabled_increase = disabled_now > self.prev_num_usv_disabled + 1e-9
 
         actions: list[dict[str, Any]] = []
+
+        if bool(getattr(self.config, "enable_robust_response", True)) and disabled_increase:
+            if self._ready("GLOBAL_REASSIGN", t) and self._reason_ready("GLOBAL_REASSIGN", "usv_failure", t):
+                actions.append(
+                    {
+                        "type": "GLOBAL_REASSIGN",
+                        "reason": "usv_failure",
+                        "mode": str(self.config.fb_reassign_mode),
+                    }
+                )
+                self._touch("GLOBAL_REASSIGN", t)
+                self._touch_reason("GLOBAL_REASSIGN", "usv_failure", t)
+
+            if (
+                self._ready("RELAX_SOFTPART", t)
+                and self._reason_ready("RELAX_SOFTPART", "failure_rebalance", t)
+                and not self._relax_active(sim_state, t)
+            ):
+                actions.append(
+                    {
+                        "type": "RELAX_SOFTPART",
+                        "reason": "failure_rebalance",
+                        "scale": 0.2,
+                        "duration": float(self.config.fb_relax_duration_sec) * 2.0,
+                    }
+                )
+                self._touch("RELAX_SOFTPART", t)
+                self._touch_reason("RELAX_SOFTPART", "failure_rebalance", t)
+
+            charge_capacity_drop = float(metrics.get("num_usv_can_charge", 0.0)) < float(metrics.get("num_usv_total", 0.0))
+            if (
+                charge_capacity_drop
+                and energy_pressure
+                and self._ready("BOOST_RECHARGE_PRIORITY", t)
+                and self._reason_ready("BOOST_RECHARGE_PRIORITY", "charging_capacity_drop", t)
+                and not self._recharge_boost_active(sim_state, t)
+            ):
+                actions.append(
+                    {
+                        "type": "BOOST_RECHARGE_PRIORITY",
+                        "reason": "charging_capacity_drop",
+                        "mult": 1.5,
+                        "duration": float(self.config.fb_recharge_boost_duration_sec),
+                    }
+                )
+                self._touch("BOOST_RECHARGE_PRIORITY", t)
+                self._touch_reason("BOOST_RECHARGE_PRIORITY", "charging_capacity_drop", t)
 
         if pending_high or (mean_low and pending_rising):
             reason = "pending_high" if pending_high else "coverage_drop_pending_rising"
@@ -111,6 +169,7 @@ class FeedbackController:
                 self._touch("BOOST_RECHARGE_PRIORITY", t)
                 self._touch_reason("BOOST_RECHARGE_PRIORITY", "energy_pressure", t)
 
+        self.prev_num_usv_disabled = disabled_now
         return actions
 
     def _pending_rising(self, k: int) -> bool:

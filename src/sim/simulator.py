@@ -10,6 +10,7 @@ from sim.config import SimConfig
 from sim.coverage.coverage_grid import CoverageGrid
 from sim.environment.environment import Environment2D
 from sim.feedback.feedback import FeedbackController, FeedbackMonitor
+from sim.failure.failure_events import maybe_trigger_failure
 from sim.pathing.path_planner import PathPlanner
 from sim.policy.strategy import create_strategy
 from sim.recharge.rendezvous import plan_rendezvous
@@ -50,6 +51,7 @@ class Simulator:
             "recharge_done": 0,
             "uav_emergency_events": 0,
             "fb_trigger_count_cum": 0,
+            "failure_event_count": 0,
         }
         self.usv_collision_count = 0
         self.out_of_bounds_count = 0
@@ -62,6 +64,9 @@ class Simulator:
         self.feedback_recharge_boost_until = -math.inf
         self.feedback_recharge_boost_mult = 1.0
         self.feedback_events: list[dict[str, object]] = []
+        self.failure_events: list[dict[str, object]] = []
+        self.failure_last_trigger_t = -math.inf
+        self.failure_forced_relax_until = -math.inf
 
     def run(
         self,
@@ -79,6 +84,7 @@ class Simulator:
         t = 0.0
         while t <= end_time + 1e-9:
             self.current_time = t
+            self._failure_tick(t=t, dt=sim_dt)
             rolled = self.tasks.update_timeouts(t, timeout=self.config.task_timeout)
             self.transition_counts["timeout_rollback"] += len(rolled)
             if rolled:
@@ -185,6 +191,13 @@ class Simulator:
             if not uav.alive:
                 continue
             active = self.tasks.find_recharge_task(uav.agent_id)
+            if active is not None and active.usv_id is not None:
+                cur_usv = self.agent_by_id.get(active.usv_id)
+                if not isinstance(cur_usv, USVAgent) or (not cur_usv.can_charge()):
+                    self.tasks.cancel_task(active.task_id, t)
+                    if uav.current_task_id == active.task_id:
+                        uav.clear_task()
+                    active = None
             if uav.battery <= 0.0 and uav.stats.get("emergency_logged", 0.0) < 1.0:
                 self.transition_counts["uav_emergency_events"] += 1
                 uav.stats["emergency_logged"] = 1.0
@@ -217,9 +230,11 @@ class Simulator:
                     active.usv_id = usv.agent_id
                 if active.usv_id is not None:
                     cur_usv = self.agent_by_id.get(active.usv_id)
-                    if isinstance(cur_usv, USVAgent):
+                    if isinstance(cur_usv, USVAgent) and cur_usv.can_charge():
                         active.rendezvous_pos = self._safe_rendezvous(uav=uav, usv=cur_usv)
                         active.target_pos = active.rendezvous_pos
+                    else:
+                        active.usv_id = None
                 if uav.is_critical():
                     active.rendezvous_pos = (uav.pos[0], uav.pos[1])
                     active.target_pos = active.rendezvous_pos
@@ -255,7 +270,7 @@ class Simulator:
                     continue
                 task.usv_id = usv.agent_id
             usv = self.agent_by_id.get(task.usv_id)
-            if not isinstance(usv, USVAgent) or not usv.alive:
+            if not isinstance(usv, USVAgent) or (not usv.alive) or (not usv.can_charge()):
                 task.usv_id = None
                 continue
             if self._usv_has_other_recharge_task(usv.agent_id, task.task_id):
@@ -330,6 +345,9 @@ class Simulator:
         cross_trigger = pending_trigger or mean_info_now < self.config.meaninfo_cross_threshold
         if cross_trigger:
             soft_scale = self.config.softpart_cross_scale
+        if self._failure_forced_relax_active(t):
+            cross_trigger = True
+            soft_scale = min(soft_scale, 0.2)
         if self._feedback_relax_active(t):
             cross_trigger = True
             if self.feedback_softpart_override_scale is not None:
@@ -354,6 +372,8 @@ class Simulator:
                 if agent.is_low_battery() or self.tasks.find_recharge_task(agent.agent_id) is not None:
                     continue
             if isinstance(agent, USVAgent):
+                if not agent.can_monitor():
+                    continue
                 if self._usv_reserved_by_recharge(agent.agent_id):
                     continue
             filtered.append(agent)
@@ -440,8 +460,12 @@ class Simulator:
             if not isinstance(uav, UAVAgent) or not isinstance(usv, USVAgent):
                 self.tasks.cancel_task(task.task_id, t)
                 continue
-            if not uav.alive or not usv.alive:
+            if not uav.alive or not usv.alive or (not usv.can_charge()):
                 self.tasks.cancel_task(task.task_id, t)
+                if uav.current_task_id == task.task_id:
+                    uav.clear_task()
+                if usv.current_task_id == task.task_id:
+                    usv.clear_task()
                 continue
             self._step_recharge_pair(task, uav, usv, t=t, dt=dt)
             handled_agents.add(uav.agent_id)
@@ -449,6 +473,12 @@ class Simulator:
 
         for agent in sorted(self.agents, key=lambda item: item.agent_id):
             if not agent.alive:
+                continue
+            if isinstance(agent, USVAgent) and not agent.is_operational():
+                if agent.current_task_id is not None:
+                    agent.clear_task()
+                agent.vel = (0.0, 0.0)
+                agent.task_status = "idle"
                 continue
             if agent.agent_id in handled_agents:
                 continue
@@ -497,6 +527,12 @@ class Simulator:
         return observe_calls
 
     def _step_recharge_pair(self, task: Task, uav: UAVAgent, usv: USVAgent, t: float, dt: float) -> None:
+        if not usv.can_charge():
+            self.tasks.cancel_task(task.task_id, t)
+            uav.clear_task()
+            usv.clear_task()
+            return
+
         rendezvous = task.rendezvous_pos or task.target_pos
         if uav.is_critical():
             rendezvous = (uav.pos[0], uav.pos[1])
@@ -664,10 +700,87 @@ class Simulator:
             "fb_trigger_count_cum": float(self.transition_counts["fb_trigger_count_cum"]),
             "fb_relax_active": 1.0 if self._feedback_relax_active(t) else 0.0,
             "fb_recharge_boost_active": 1.0 if self._feedback_recharge_boost_active(t) else 0.0,
+            "failure_event_count_cum": float(self.transition_counts["failure_event_count"]),
+            "num_usv_disabled": float(self.num_usv_disabled()),
+            "num_usv_damaged": float(self.num_usv_damaged()),
+            "failure_forced_relax_active": 1.0 if self._failure_forced_relax_active(t) else 0.0,
             "usv_preference_hit_rate": float(self.usv_preference_hit_rate()),
             "usv_cross_band_ratio": float(self.usv_cross_band_ratio()),
         }
         self.history.append(row)
+
+    def _failure_tick(self, t: float, dt: float) -> None:
+        event = maybe_trigger_failure(self, t=t, dt=dt)
+        if event is None:
+            return
+        self._apply_failure_event(event, t=t)
+
+    def _apply_failure_event(self, event: dict[str, object], t: float) -> None:
+        usv_id = str(event.get("usv_id", ""))
+        kind = str(event.get("kind", "DISABLED")).upper()
+        usv = self.agent_by_id.get(usv_id)
+        if not isinstance(usv, USVAgent):
+            return
+        if kind not in ("DAMAGED", "DISABLED"):
+            kind = "DISABLED"
+        if usv.health_state == kind:
+            return
+
+        usv.set_health_state(
+            kind,
+            t=t,
+            damage_speed_scale=self.config.damage_speed_scale,
+            damage_turn_scale=self.config.damage_turn_scale,
+            damage_charge_scale=self.config.damage_charge_scale,
+        )
+        self.failure_last_trigger_t = float(t)
+        record = {"t": float(t), "usv_id": usv.agent_id, "kind": kind}
+        self.failure_events.append(record)
+        self.transition_counts["failure_event_count"] += 1
+
+        self._cleanup_tasks_for_failed_usv(usv=usv, t=t)
+
+        if (
+            kind == "DISABLED"
+            and bool(getattr(self.config, "enable_robust_response", True))
+            and bool(getattr(self.config, "forced_relax_on_failure", True))
+        ):
+            duration = float(getattr(self.config, "forced_relax_duration_sec", 300.0))
+            self.failure_forced_relax_until = max(self.failure_forced_relax_until, t + duration)
+
+        print(f"[FAIL] t={t:.1f}s usv={usv.agent_id} kind={kind}")
+
+    def _cleanup_tasks_for_failed_usv(self, usv: USVAgent, t: float) -> None:
+        # Release monitor assignment currently owned by this USV.
+        if usv.current_task_id is not None:
+            task = self.tasks.get_task(usv.current_task_id)
+            if task is not None:
+                if task.task_type == "monitor":
+                    if task.status in ("assigned", "in_progress") and task.assigned_to == usv.agent_id:
+                        self.tasks.release_task(task.task_id, t)
+                elif task.task_type == "recharge":
+                    self.tasks.cancel_task(task.task_id, t)
+            usv.clear_task()
+        usv.charging_uav_id = None
+
+        # Cancel recharge tasks depending on this USV and release related UAV.
+        for task in self.tasks.all_tasks(task_type="recharge"):
+            if task.usv_id != usv.agent_id:
+                continue
+            if task.status not in ("pending", "assigned", "in_progress"):
+                continue
+            self.tasks.cancel_task(task.task_id, t)
+            if task.uav_id is not None:
+                uav = self.agent_by_id.get(task.uav_id)
+                if isinstance(uav, UAVAgent) and uav.current_task_id == task.task_id:
+                    uav.clear_task()
+
+        # Release monitor tasks assigned to this USV.
+        for task in self.tasks.all_tasks(task_type="monitor"):
+            if task.assigned_to != usv.agent_id:
+                continue
+            if task.status in ("assigned", "in_progress"):
+                self.tasks.release_task(task.task_id, t)
 
     def _feedback_tick(self, t: float) -> None:
         if not self.enable_feedback or self.feedback_monitor is None or self.feedback_controller is None:
@@ -766,6 +879,13 @@ class Simulator:
             return False
         return t <= self.feedback_recharge_boost_until
 
+    def _failure_forced_relax_active(self, t: float) -> bool:
+        if not bool(getattr(self.config, "enable_robust_response", True)):
+            return False
+        if not bool(getattr(self.config, "forced_relax_on_failure", True)):
+            return False
+        return t <= self.failure_forced_relax_until
+
     def _current_recharge_boost_mult(self, t: float) -> float:
         if not self._feedback_recharge_boost_active(t):
             self.feedback_recharge_boost_mult = 1.0
@@ -831,7 +951,7 @@ class Simulator:
 
         candidates: list[USVAgent] = []
         for usv in self._usvs():
-            if not usv.alive:
+            if not usv.alive or (not usv.can_charge()):
                 continue
             if usv.agent_id in busy_usv_ids:
                 continue
@@ -842,7 +962,7 @@ class Simulator:
         return candidates[0]
 
     def _nearest_usv(self, pos: tuple[float, float]) -> USVAgent | None:
-        usvs = [usv for usv in self._usvs() if usv.alive]
+        usvs = [usv for usv in self._usvs() if usv.alive and usv.can_charge()]
         if not usvs:
             return None
         usvs.sort(key=lambda usv: (_distance(pos, usv.pos), usv.agent_id))
@@ -940,6 +1060,12 @@ class Simulator:
             return 0.0
         cross = max(0.0, total - hits)
         return float(cross / total)
+
+    def num_usv_disabled(self) -> int:
+        return sum(1 for usv in self._usvs() if usv.health_state == "DISABLED")
+
+    def num_usv_damaged(self) -> int:
+        return sum(1 for usv in self._usvs() if usv.health_state == "DAMAGED")
 
     def usv_softpart_layout(self) -> list[dict[str, float]]:
         layout: list[dict[str, float]] = []
