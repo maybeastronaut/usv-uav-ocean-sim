@@ -1,3 +1,15 @@
 """Simulation package skeleton."""
 
-__all__ = ["config", "coverage", "environment", "run", "sim", "tasks"]
+__all__ = [
+    "agents",
+    "config",
+    "coverage",
+    "environment",
+    "pathing",
+    "policy",
+    "recharge",
+    "run",
+    "sim",
+    "simulator",
+    "tasks",
+]

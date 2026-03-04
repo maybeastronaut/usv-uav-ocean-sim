@@ -86,6 +86,34 @@ NEARSHORE_TASK_WEIGHT: float = 1.2
 RISK_TASK_WEIGHT: float = 1.0
 OFFSHORE_TASK_WEIGHT: float = 0.8
 
+# Step5 simulator execution parameters
+SIM_DT: float = 5.0  # seconds
+T_END: float = 1200.0  # seconds
+TASK_TIMEOUT: float = 1200.0  # seconds
+TASK_COMPLETE_THRESHOLD: float = 0.4
+WORK_RADIUS_FACTOR: float = 0.5  # work radius = sensor_radius * factor
+FRAME_EVERY: float = 10.0  # seconds
+WIND_EFFECT_UAV: float = 0.25  # wind contribution scaling for UAV
+CURRENT_EFFECT_USV: float = 1.0  # current contribution scaling for USV
+USV_TURN_RATE_DEG: float = 20.0  # degrees per second
+OBSTACLE_AVOIDANCE_ANGLES: tuple[float, ...] = (15.0, 30.0, 45.0)  # degrees
+
+# Step6 path/policy parameters
+SAFE_MARGIN: float = 150.0  # meters, obstacle bypass margin
+WP_REACHED_EPS: float = 80.0  # meters, waypoint reached threshold
+STRATEGY: str = "priority"  # "random" | "nearest" | "priority"
+
+# Step7 recharge parameters
+UAV_BATTERY_MAX: float = 900.0  # abstract energy units
+UAV_DISCHARGE_RATE: float = 0.9  # energy units / second
+UAV_LOW_BATTERY_FRAC: float = 0.45  # trigger recharge below this fraction
+UAV_CRITICAL_BATTERY_FRAC: float = 0.15  # emergency level fraction
+USV_CHARGE_RATE: float = 3.0  # energy units / second
+RENDEZVOUS_EPS: float = 150.0  # meters
+RECHARGE_TARGET_FRAC: float = 0.9  # recharge complete at this fraction
+RECHARGE_TASK_PRIORITY: float = 2.0  # higher than monitor tasks
+ALLOW_USV_PREEMPT_MONITOR_FOR_RECHARGE: bool = True
+
 
 @dataclass
 class SimConfig:
@@ -106,8 +134,13 @@ class SimConfig:
     risk_obstacle_count: int = 20
     risk_obstacle_radius_min: float = 80.0
     risk_obstacle_radius_max: float = 220.0
+    uav_speed: float = UAV_SPEED
+    usv_speed: float = USV_SPEED
     uav_sensor_radius: float = UAV_SENSOR_RADIUS
     usv_sensor_radius: float = USV_SENSOR_RADIUS
+    uav_max_energy: float = UAV_MAX_ENERGY
+    uav_energy_consumption: float = UAV_ENERGY_CONSUMPTION
+    uav_low_energy_threshold: float = UAV_LOW_ENERGY_THRESHOLD
     current_near: tuple[float, float] = CURRENT_NEAR
     current_risk: tuple[float, float] = CURRENT_RISK
     current_offshore: tuple[float, float] = CURRENT_OFFSHORE
@@ -134,6 +167,28 @@ class SimConfig:
     nearshore_task_weight: float = NEARSHORE_TASK_WEIGHT
     risk_task_weight: float = RISK_TASK_WEIGHT
     offshore_task_weight: float = OFFSHORE_TASK_WEIGHT
+    sim_dt: float = SIM_DT
+    t_end: float = T_END
+    task_timeout: float = TASK_TIMEOUT
+    task_complete_threshold: float = TASK_COMPLETE_THRESHOLD
+    work_radius_factor: float = WORK_RADIUS_FACTOR
+    frame_every: float = FRAME_EVERY
+    wind_effect_uav: float = WIND_EFFECT_UAV
+    current_effect_usv: float = CURRENT_EFFECT_USV
+    usv_turn_rate_deg: float = USV_TURN_RATE_DEG
+    obstacle_avoidance_angles: tuple[float, ...] = OBSTACLE_AVOIDANCE_ANGLES
+    safe_margin: float = SAFE_MARGIN
+    wp_reached_eps: float = WP_REACHED_EPS
+    strategy: str = STRATEGY
+    uav_battery_max: float = UAV_BATTERY_MAX
+    uav_discharge_rate: float = UAV_DISCHARGE_RATE
+    uav_low_battery_frac: float = UAV_LOW_BATTERY_FRAC
+    uav_critical_battery_frac: float = UAV_CRITICAL_BATTERY_FRAC
+    usv_charge_rate: float = USV_CHARGE_RATE
+    rendezvous_eps: float = RENDEZVOUS_EPS
+    recharge_target_frac: float = RECHARGE_TARGET_FRAC
+    recharge_task_priority: float = RECHARGE_TASK_PRIORITY
+    allow_usv_preempt_monitor_for_recharge: bool = ALLOW_USV_PREEMPT_MONITOR_FOR_RECHARGE
     runs_dir: str = "runs"
     run_name: str | None = None
 
