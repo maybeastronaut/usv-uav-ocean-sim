@@ -27,7 +27,7 @@ USV_DRAW_RADIUS: float = 100.0
 
 # Platform speed (meters / second)
 UAV_SPEED: float = 20.0
-USV_SPEED: float = 5.0
+USV_SPEED: float = 40.0
 
 # Sensor radius (meters)
 UAV_SENSOR_RADIUS: float = 400.0
@@ -93,7 +93,7 @@ TASK_TIMEOUT: float = 1200.0  # seconds
 TASK_COMPLETE_THRESHOLD: float = 0.4
 WORK_RADIUS_FACTOR: float = 0.5  # work radius = sensor_radius * factor
 FRAME_EVERY: float = 10.0  # seconds
-WIND_EFFECT_UAV: float = 0.25  # wind contribution scaling for UAV
+WIND_EFFECT_UAV: float = 0.0  # wind contribution scaling for UAV
 CURRENT_EFFECT_USV: float = 1.0  # current contribution scaling for USV
 USV_TURN_RATE_DEG: float = 20.0  # degrees per second
 OBSTACLE_AVOIDANCE_ANGLES: tuple[float, ...] = (15.0, 30.0, 45.0)  # degrees
@@ -104,13 +104,13 @@ WP_REACHED_EPS: float = 80.0  # meters, waypoint reached threshold
 STRATEGY: str = "priority"  # "random" | "nearest" | "priority"
 
 # Step7 recharge parameters
-UAV_BATTERY_MAX: float = 900.0  # abstract energy units
-UAV_DISCHARGE_RATE: float = 0.9  # energy units / second
-UAV_LOW_BATTERY_FRAC: float = 0.45  # trigger recharge below this fraction
-UAV_CRITICAL_BATTERY_FRAC: float = 0.15  # emergency level fraction
-USV_CHARGE_RATE: float = 3.0  # energy units / second
+UAV_BATTERY_MAX: float = 620.0  # abstract energy units
+UAV_DISCHARGE_RATE: float = 1.75  # energy units / second
+UAV_LOW_BATTERY_FRAC: float = 0.35  # trigger recharge below this fraction
+UAV_CRITICAL_BATTERY_FRAC: float = 0.6  # emergency level fraction
+USV_CHARGE_RATE: float = 14.0  # energy units / second
 RENDEZVOUS_EPS: float = 150.0  # meters
-RECHARGE_TARGET_FRAC: float = 0.9  # recharge complete at this fraction
+RECHARGE_TARGET_FRAC: float = 0.75  # recharge complete at this fraction
 RECHARGE_TASK_PRIORITY: float = 2.0  # higher than monitor tasks
 ALLOW_USV_PREEMPT_MONITOR_FOR_RECHARGE: bool = True
 
