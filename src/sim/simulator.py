@@ -9,6 +9,7 @@ from sim.agents.usv import USVAgent
 from sim.config import SimConfig
 from sim.coverage.coverage_grid import CoverageGrid
 from sim.environment.environment import Environment2D
+from sim.feedback.feedback import FeedbackController, FeedbackMonitor
 from sim.pathing.path_planner import PathPlanner
 from sim.policy.strategy import create_strategy
 from sim.recharge.rendezvous import plan_rendezvous
@@ -48,9 +49,19 @@ class Simulator:
             "recharge_created": 0,
             "recharge_done": 0,
             "uav_emergency_events": 0,
+            "fb_trigger_count_cum": 0,
         }
         self.usv_collision_count = 0
         self.out_of_bounds_count = 0
+        self.current_time = 0.0
+        self.enable_feedback = bool(getattr(config, "enable_feedback", False))
+        self.feedback_monitor = FeedbackMonitor() if self.enable_feedback else None
+        self.feedback_controller = FeedbackController(config) if self.enable_feedback else None
+        self.feedback_softpart_override_until = -math.inf
+        self.feedback_softpart_override_scale: float | None = None
+        self.feedback_recharge_boost_until = -math.inf
+        self.feedback_recharge_boost_mult = 1.0
+        self.feedback_events: list[dict[str, object]] = []
 
     def run(
         self,
@@ -67,6 +78,7 @@ class Simulator:
 
         t = 0.0
         while t <= end_time + 1e-9:
+            self.current_time = t
             rolled = self.tasks.update_timeouts(t, timeout=self.config.task_timeout)
             self.transition_counts["timeout_rollback"] += len(rolled)
             if rolled:
@@ -87,6 +99,7 @@ class Simulator:
             self._update_recharge_needs(t)
             self._assign_recharge_tasks(t)
             self._assign_idle_agents(t, log_select=_is_multiple(t, 60.0))
+            self._feedback_tick(t)
 
             self._log_tick(t, observe_calls_tick=observe_calls_tick)
             if _is_multiple(t, 60.0):
@@ -183,13 +196,14 @@ class Simulator:
             if active is None:
                 usv = self._select_recharge_usv(uav, exclude_task_id=None)
                 rendezvous = self._safe_rendezvous(uav=uav, usv=usv)
+                recharge_priority = self.config.recharge_task_priority * self._current_recharge_boost_mult(t)
                 task, created = self.tasks.create_recharge_task(
                     uav_id=uav.agent_id,
                     usv_id=usv.agent_id if usv is not None else None,
                     rendezvous_pos=rendezvous,
                     t=t,
                     required_energy=target_energy,
-                    priority=self.config.recharge_task_priority,
+                    priority=recharge_priority,
                 )
                 if created:
                     self.transition_counts["recharge_created"] += 1
@@ -210,7 +224,7 @@ class Simulator:
                     active.rendezvous_pos = (uav.pos[0], uav.pos[1])
                     active.target_pos = active.rendezvous_pos
                 active.required_energy = target_energy
-                active.priority = self.config.recharge_task_priority
+                active.priority = self.config.recharge_task_priority * self._current_recharge_boost_mult(t)
                 active.last_update_time = t
 
     def _assign_recharge_tasks(self, t: float) -> None:
@@ -316,6 +330,10 @@ class Simulator:
         cross_trigger = pending_trigger or mean_info_now < self.config.meaninfo_cross_threshold
         if cross_trigger:
             soft_scale = self.config.softpart_cross_scale
+        if self._feedback_relax_active(t):
+            cross_trigger = True
+            if self.feedback_softpart_override_scale is not None:
+                soft_scale = min(soft_scale, float(self.feedback_softpart_override_scale))
         if self.config.ablate_softpart:
             soft_scale = 0.0
 
@@ -643,8 +661,113 @@ class Simulator:
             "uav_battery_min": float(battery_min),
             "uav_battery_mean": float(battery_mean),
             "uav_dead_count": float(self.transition_counts["uav_emergency_events"]),
+            "fb_trigger_count_cum": float(self.transition_counts["fb_trigger_count_cum"]),
+            "fb_relax_active": 1.0 if self._feedback_relax_active(t) else 0.0,
+            "fb_recharge_boost_active": 1.0 if self._feedback_recharge_boost_active(t) else 0.0,
+            "usv_preference_hit_rate": float(self.usv_preference_hit_rate()),
+            "usv_cross_band_ratio": float(self.usv_cross_band_ratio()),
         }
         self.history.append(row)
+
+    def _feedback_tick(self, t: float) -> None:
+        if not self.enable_feedback or self.feedback_monitor is None or self.feedback_controller is None:
+            return
+
+        metrics = self.feedback_monitor.update(self, t)
+        actions = self.feedback_controller.step(metrics, self)
+        for action in actions:
+            self._apply_feedback_action(action, t)
+
+    def _apply_feedback_action(self, action: dict[str, object], t: float) -> None:
+        action_type = str(action.get("type", "UNKNOWN"))
+        reason = str(action.get("reason", "n/a"))
+
+        if action_type == "RELAX_SOFTPART":
+            self.feedback_softpart_override_scale = float(action.get("scale", 0.2))
+            duration = float(action.get("duration", 0.0))
+            self.feedback_softpart_override_until = max(self.feedback_softpart_override_until, t + duration)
+            self.feedback_events.append(
+                {"t": float(t), "action": action_type, "reason": reason, "duration": duration}
+            )
+            self.transition_counts["fb_trigger_count_cum"] += 1
+            print(
+                f"[FB] t={t:.1f}s action={action_type} reason={reason} "
+                f"duration={duration:.1f}s scale={self.feedback_softpart_override_scale:.2f}"
+            )
+            return
+
+        if action_type == "BOOST_RECHARGE_PRIORITY":
+            self.feedback_recharge_boost_mult = float(action.get("mult", 1.0))
+            duration = float(action.get("duration", 0.0))
+            self.feedback_recharge_boost_until = max(self.feedback_recharge_boost_until, t + duration)
+            self.feedback_events.append(
+                {"t": float(t), "action": action_type, "reason": reason, "duration": duration}
+            )
+            self.transition_counts["fb_trigger_count_cum"] += 1
+            print(
+                f"[FB] t={t:.1f}s action={action_type} reason={reason} "
+                f"duration={duration:.1f}s mult={self.feedback_recharge_boost_mult:.2f}"
+            )
+            return
+
+        if action_type == "GLOBAL_REASSIGN":
+            mode = str(action.get("mode", "soft")).lower()
+            released = 0
+            if mode == "hard":
+                for task in self.tasks.get_assigned_tasks(task_type="monitor"):
+                    if self.tasks.release_task(task.task_id, t):
+                        released += 1
+                for agent in self.agents:
+                    if agent.current_task_id is None:
+                        continue
+                    task = self.tasks.get_task(agent.current_task_id)
+                    if task is not None and task.task_type == "monitor":
+                        agent.clear_task()
+            else:
+                for agent in self.agents:
+                    if agent.current_task_id is None:
+                        agent.goal_pos = None
+                        agent.current_waypoints = []
+                        agent.current_wp_idx = 0
+                        continue
+                    task = self.tasks.get_task(agent.current_task_id)
+                    if task is None or task.task_type != "monitor":
+                        continue
+                    agent.goal_pos = None
+                    agent.current_waypoints = []
+                    agent.current_wp_idx = 0
+
+            self._assign_idle_agents(t, log_select=False)
+            self.feedback_events.append(
+                {"t": float(t), "action": action_type, "reason": reason, "mode": mode, "released": released}
+            )
+            self.transition_counts["fb_trigger_count_cum"] += 1
+            print(
+                f"[FB] t={t:.1f}s action={action_type} reason={reason} "
+                f"mode={mode} released={released}"
+            )
+            return
+
+    def _feedback_relax_active(self, t: float) -> bool:
+        if not self.enable_feedback:
+            return False
+        return t <= self.feedback_softpart_override_until
+
+    def _feedback_recharge_boost_active(self, t: float) -> bool:
+        if not self.enable_feedback:
+            return False
+        return t <= self.feedback_recharge_boost_until
+
+    def _current_recharge_boost_mult(self, t: float) -> float:
+        if not self._feedback_recharge_boost_active(t):
+            self.feedback_recharge_boost_mult = 1.0
+            return 1.0
+        return max(1.0, float(self.feedback_recharge_boost_mult))
+
+    def latest_feedback_event(self) -> dict[str, object] | None:
+        if not self.feedback_events:
+            return None
+        return self.feedback_events[-1]
 
     def _safe_rendezvous(self, uav: UAVAgent, usv: USVAgent | None) -> tuple[float, float]:
         if usv is None or uav.is_critical():

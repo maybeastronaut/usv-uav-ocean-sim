@@ -132,6 +132,17 @@ RECHARGE_TARGET_FRAC: float = 0.75  # recharge complete at this fraction
 RECHARGE_TASK_PRIORITY: float = 2.0  # higher than monitor tasks
 ALLOW_USV_PREEMPT_MONITOR_FOR_RECHARGE: bool = True
 
+# Step9 feedback layer parameters
+ENABLE_FEEDBACK: bool = True
+FB_COOLDOWN_SEC: float = 120.0
+FB_PENDING_HIGH_FRAC: float = 0.90
+FB_MEANINFO_LOW: float = 0.06
+FB_P5INFO_LOW: float = 0.03
+FB_ENERGY_PRESSURE_BATT: float = 0.35
+FB_RELAX_DURATION_SEC: float = 180.0
+FB_RECHARGE_BOOST_DURATION_SEC: float = 120.0
+FB_REASSIGN_MODE: str = "soft"  # "soft" | "hard"
+
 
 @dataclass
 class SimConfig:
@@ -223,6 +234,15 @@ class SimConfig:
     recharge_target_frac: float = RECHARGE_TARGET_FRAC
     recharge_task_priority: float = RECHARGE_TASK_PRIORITY
     allow_usv_preempt_monitor_for_recharge: bool = ALLOW_USV_PREEMPT_MONITOR_FOR_RECHARGE
+    enable_feedback: bool = ENABLE_FEEDBACK
+    fb_cooldown_sec: float = FB_COOLDOWN_SEC
+    fb_pending_high_frac: float = FB_PENDING_HIGH_FRAC
+    fb_meaninfo_low: float = FB_MEANINFO_LOW
+    fb_p5info_low: float = FB_P5INFO_LOW
+    fb_energy_pressure_batt: float = FB_ENERGY_PRESSURE_BATT
+    fb_relax_duration_sec: float = FB_RELAX_DURATION_SEC
+    fb_recharge_boost_duration_sec: float = FB_RECHARGE_BOOST_DURATION_SEC
+    fb_reassign_mode: str = FB_REASSIGN_MODE
     runs_dir: str = "runs"
     run_name: str | None = None
 
