@@ -108,16 +108,17 @@ TASK_POLICY: str = "priority"  # "random" | "nearest" | "priority" | "multimetri
 ABLATE_SOFTPART: bool = False
 ABLATE_ENERGY_TERM: bool = False
 ABLATE_RISK_TERM: bool = False
-W_NEED: float = 0.40
-W_PRIO: float = 0.35
-W_DIST: float = 1.30
-W_RISK: float = 0.20
-W_ENERGY: float = 1.20
-W_SOFTPART: float = 0.15
-SOFTPART_SIGMA: float = 2500.0  # meters
+W_NEED: float = 0.45
+W_PRIO: float = 0.30
+W_DIST: float = 0.90
+W_RISK: float = 0.00
+W_ENERGY: float = 0.90
+W_SOFTPART: float = 0.20
+SOFTPART_SIGMA: float = 1200.0  # meters
 PENDING_CROSS_THRESHOLD: int = 85
+PENDING_CROSS_THRESHOLD_FRAC: float = 0.85  # if pending > frac * MAX_PENDING_TASKS, soften partition
 MEANINFO_CROSS_THRESHOLD: float = 0.08
-SOFTPART_CROSS_SCALE: float = 0.3
+SOFTPART_CROSS_SCALE: float = 0.70  # effective soft-partition weight scale under high pressure
 RISK_ZONE_PENALTY: float = 1.0
 
 # Step7 recharge parameters
@@ -209,6 +210,7 @@ class SimConfig:
     w_softpart: float = W_SOFTPART
     softpart_sigma: float = SOFTPART_SIGMA
     pending_cross_threshold: int = PENDING_CROSS_THRESHOLD
+    pending_cross_threshold_frac: float = PENDING_CROSS_THRESHOLD_FRAC
     meaninfo_cross_threshold: float = MEANINFO_CROSS_THRESHOLD
     softpart_cross_scale: float = SOFTPART_CROSS_SCALE
     risk_zone_penalty: float = RISK_ZONE_PENALTY

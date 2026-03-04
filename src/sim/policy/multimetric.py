@@ -41,7 +41,8 @@ class MultiMetricStrategy:
         prio = float(task.priority)
         dist = agent.distance_to(task.target_pos)
         diag = max(1.0, math.hypot(self.config.map_width, self.config.map_height))
-        norm_dist = min(1.5, dist / diag)
+        norm_denom = max(1.0, 0.6 * diag)
+        norm_dist = max(0.0, min(1.0, dist / norm_denom))
 
         risk_cost = self._risk_cost(task)
         if self.config.ablate_risk_term:

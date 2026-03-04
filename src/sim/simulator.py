@@ -305,7 +305,15 @@ class Simulator:
         pending_count = len(pending_monitor)
         mean_info_now = self.coverage.mean_info(t, mode="all")
         soft_scale = 1.0
-        if pending_count > self.config.pending_cross_threshold or mean_info_now < self.config.meaninfo_cross_threshold:
+        pending_frac_threshold = float(
+            getattr(
+                self.config,
+                "pending_cross_threshold_frac",
+                self.config.pending_cross_threshold / max(1.0, float(self.config.max_pending_tasks)),
+            )
+        )
+        pending_trigger = pending_count > int(round(pending_frac_threshold * self.config.max_pending_tasks))
+        if pending_trigger or mean_info_now < self.config.meaninfo_cross_threshold:
             soft_scale = self.config.softpart_cross_scale
         if self.config.ablate_softpart:
             soft_scale = 0.0
