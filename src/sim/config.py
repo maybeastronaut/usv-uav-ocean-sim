@@ -103,6 +103,23 @@ SAFE_MARGIN: float = 150.0  # meters, obstacle bypass margin
 WP_REACHED_EPS: float = 80.0  # meters, waypoint reached threshold
 STRATEGY: str = "priority"  # "random" | "nearest" | "priority"
 
+# Step8 task layer parameters
+TASK_POLICY: str = "priority"  # "random" | "nearest" | "priority" | "multimetric"
+ABLATE_SOFTPART: bool = False
+ABLATE_ENERGY_TERM: bool = False
+ABLATE_RISK_TERM: bool = False
+W_NEED: float = 0.40
+W_PRIO: float = 0.35
+W_DIST: float = 1.30
+W_RISK: float = 0.20
+W_ENERGY: float = 1.20
+W_SOFTPART: float = 0.15
+SOFTPART_SIGMA: float = 2500.0  # meters
+PENDING_CROSS_THRESHOLD: int = 85
+MEANINFO_CROSS_THRESHOLD: float = 0.08
+SOFTPART_CROSS_SCALE: float = 0.3
+RISK_ZONE_PENALTY: float = 1.0
+
 # Step7 recharge parameters
 UAV_BATTERY_MAX: float = 620.0  # abstract energy units
 UAV_DISCHARGE_RATE: float = 1.75  # energy units / second
@@ -180,6 +197,21 @@ class SimConfig:
     safe_margin: float = SAFE_MARGIN
     wp_reached_eps: float = WP_REACHED_EPS
     strategy: str = STRATEGY
+    task_policy: str = TASK_POLICY
+    ablate_softpart: bool = ABLATE_SOFTPART
+    ablate_energy_term: bool = ABLATE_ENERGY_TERM
+    ablate_risk_term: bool = ABLATE_RISK_TERM
+    w_need: float = W_NEED
+    w_prio: float = W_PRIO
+    w_dist: float = W_DIST
+    w_risk: float = W_RISK
+    w_energy: float = W_ENERGY
+    w_softpart: float = W_SOFTPART
+    softpart_sigma: float = SOFTPART_SIGMA
+    pending_cross_threshold: int = PENDING_CROSS_THRESHOLD
+    meaninfo_cross_threshold: float = MEANINFO_CROSS_THRESHOLD
+    softpart_cross_scale: float = SOFTPART_CROSS_SCALE
+    risk_zone_penalty: float = RISK_ZONE_PENALTY
     uav_battery_max: float = UAV_BATTERY_MAX
     uav_discharge_rate: float = UAV_DISCHARGE_RATE
     uav_low_battery_frac: float = UAV_LOW_BATTERY_FRAC

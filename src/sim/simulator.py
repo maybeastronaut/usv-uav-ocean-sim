@@ -32,7 +32,8 @@ class Simulator:
         self.tasks = TaskGenerator(self.region_map, config)
         self._rng = random.Random(config.seed + 311)
         self.path_planner = PathPlanner(safe_margin=config.safe_margin)
-        self.strategy = create_strategy(config.strategy, seed=config.seed)
+        self.policy_name = self._resolve_policy_name()
+        self.strategy = create_strategy(self.policy_name, seed=config.seed, config=config)
 
         self.agents: list[UAVAgent | USVAgent] = self._init_agents()
         self.agent_by_id = {agent.agent_id: agent for agent in self.agents}
@@ -149,6 +150,21 @@ class Simulator:
                 )
             )
         agents.sort(key=lambda a: a.agent_id)
+        usvs = [agent for agent in agents if isinstance(agent, USVAgent)]
+        n_usv = max(1, len(usvs))
+        for idx, usv in enumerate(sorted(usvs, key=lambda a: a.agent_id)):
+            left = idx * self.config.map_width / n_usv
+            right = (idx + 1) * self.config.map_width / n_usv
+            cx = 0.5 * (left + right)
+            cy = 0.5 * self.config.map_height
+            usv.stats["preferred_band_idx"] = float(idx)
+            usv.stats["preferred_band_left"] = float(left)
+            usv.stats["preferred_band_right"] = float(right)
+            usv.stats["preferred_center_x"] = float(cx)
+            usv.stats["preferred_center_y"] = float(cy)
+            usv.stats["monitor_assign_count"] = 0.0
+            usv.stats["softpart_hits"] = 0.0
+            usv.stats["pref_distance_sum"] = 0.0
         return agents
 
     def _update_recharge_needs(self, t: float) -> None:
@@ -285,6 +301,15 @@ class Simulator:
     def _assign_idle_agents(self, t: float, log_select: bool = False) -> None:
         region_info = self.region_map.region_info_map(t)
         self.tasks.refresh_pending_priorities(region_info, t)
+        pending_monitor = self.tasks.get_pending_tasks(task_type="monitor")
+        pending_count = len(pending_monitor)
+        mean_info_now = self.coverage.mean_info(t, mode="all")
+        soft_scale = 1.0
+        if pending_count > self.config.pending_cross_threshold or mean_info_now < self.config.meaninfo_cross_threshold:
+            soft_scale = self.config.softpart_cross_scale
+        if self.config.ablate_softpart:
+            soft_scale = 0.0
+
         low_or_recharge_uav = [
             uav
             for uav in self._uavs()
@@ -293,6 +318,7 @@ class Simulator:
         recharge_pressure = len(low_or_recharge_uav) / max(1.0, float(self.config.num_uav))
         for usv in self._usvs():
             usv.stats["recharge_pressure"] = recharge_pressure
+            usv.stats["softpart_scale"] = soft_scale
 
         idle_agents = [agent for agent in self.agents if agent.alive and agent.current_task_id is None]
         filtered: list[UAVAgent | USVAgent] = []
@@ -308,39 +334,60 @@ class Simulator:
 
         idle_agents.sort(key=lambda agent: agent.agent_id)
 
-        pending_monitor = self.tasks.get_pending_tasks(task_type="monitor")
         if not idle_agents or not pending_monitor:
             return
 
         free_tasks: dict[int, Task] = {task.task_id: task for task in pending_monitor}
-        for agent in idle_agents:
-            if not free_tasks:
+        free_agents: dict[str, UAVAgent | USVAgent] = {agent.agent_id: agent for agent in idle_agents}
+        while free_tasks and free_agents:
+            best: tuple[float, float, str, int] | None = None
+            best_agent: UAVAgent | USVAgent | None = None
+            best_task: Task | None = None
+
+            for agent_id in sorted(free_agents):
+                agent = free_agents[agent_id]
+                for task_id in sorted(free_tasks):
+                    task = free_tasks[task_id]
+                    pair_score = float(self.strategy.pair_score(agent, task, region_info, t))
+                    if not math.isfinite(pair_score):
+                        continue
+                    dist = agent.distance_to(task.target_pos)
+                    rank = (pair_score, -dist, -task_id, agent_id)
+                    if best is None or rank > best:
+                        best = rank
+                        best_agent = agent
+                        best_task = task
+
+            if best_agent is None or best_task is None:
                 break
-            available = [free_tasks[task_id] for task_id in sorted(free_tasks)]
-            task_id = self.strategy.select_task(agent, available, region_info, t)
-            if task_id is None or task_id not in free_tasks:
-                continue
-            picked = free_tasks[task_id]
+
             if log_select:
-                dist = agent.distance_to(picked.target_pos)
+                dist = best_agent.distance_to(best_task.target_pos)
                 print(
-                    f"[select] t={t:.1f}, agent={agent.agent_id}, strategy={self.config.strategy}, "
-                    f"pick task_id={picked.task_id}, region={picked.region_id}, "
-                    f"priority={picked.priority:.3f}, dist={dist:.1f}"
+                    f"[select] t={t:.1f}, agent={best_agent.agent_id}, strategy={self.policy_name}, "
+                    f"pick task_id={best_task.task_id}, region={best_task.region_id}, "
+                    f"priority={best_task.priority:.3f}, dist={dist:.1f}"
                 )
-            ok = self.tasks.assign_task(task_id=task_id, agent_id=agent.agent_id, t=t)
+
+            ok = self.tasks.assign_task(task_id=best_task.task_id, agent_id=best_agent.agent_id, t=t)
             if not ok:
+                del free_tasks[best_task.task_id]
                 continue
-            agent.set_task(task_id)
-            agent.task_status = "moving"
-            agent.goal_pos = None
-            agent.current_waypoints = []
-            agent.current_wp_idx = 0
-            if picked.region_id is not None:
-                agent.stats["last_monitor_rx"] = float(picked.region_id[0])
-                agent.stats["last_monitor_ry"] = float(picked.region_id[1])
+
+            best_agent.set_task(best_task.task_id)
+            best_agent.task_status = "moving"
+            best_agent.goal_pos = None
+            best_agent.current_waypoints = []
+            best_agent.current_wp_idx = 0
+            if best_task.region_id is not None:
+                best_agent.stats["last_monitor_rx"] = float(best_task.region_id[0])
+                best_agent.stats["last_monitor_ry"] = float(best_task.region_id[1])
+            if isinstance(best_agent, USVAgent):
+                self._update_usv_softpart_stats(best_agent, best_task)
+
             self.transition_counts["assigned"] += 1
-            del free_tasks[task_id]
+            del free_tasks[best_task.task_id]
+            del free_agents[best_agent.agent_id]
 
     def _step_agents(self, t: float, dt: float) -> int:
         observe_calls = 0
@@ -586,6 +633,31 @@ class Simulator:
             return (uav.pos[0], uav.pos[1])
         return plan_rendezvous(uav=uav, usv=usv, env=self.env, safety_margin=self.config.safe_margin)
 
+    def _resolve_policy_name(self) -> str:
+        policy = (getattr(self.config, "task_policy", "") or "").strip().lower()
+        strategy = (getattr(self.config, "strategy", "") or "").strip().lower()
+        if strategy and strategy != "priority" and (not policy or policy == "priority"):
+            return strategy
+        if policy:
+            return policy
+        if strategy:
+            return strategy
+        return "priority"
+
+    def _update_usv_softpart_stats(self, usv: USVAgent, task: Task) -> None:
+        if task.region_id is None:
+            return
+        stats = usv.stats
+        stats["monitor_assign_count"] = stats.get("monitor_assign_count", 0.0) + 1.0
+        tx = float(task.target_pos[0])
+        left = float(stats.get("preferred_band_left", 0.0))
+        right = float(stats.get("preferred_band_right", self.config.map_width))
+        hit = left <= tx < right or (abs(tx - self.config.map_width) <= 1e-6 and abs(right - self.config.map_width) <= 1e-6)
+        if hit:
+            stats["softpart_hits"] = stats.get("softpart_hits", 0.0) + 1.0
+        cx = float(stats.get("preferred_center_x", tx))
+        stats["pref_distance_sum"] = stats.get("pref_distance_sum", 0.0) + abs(tx - cx)
+
     def _select_recharge_usv(self, uav: UAVAgent, exclude_task_id: int | None) -> USVAgent | None:
         busy_usv_ids: set[str] = set()
         for task in self.tasks.all_tasks(task_type="recharge"):
@@ -686,6 +758,29 @@ class Simulator:
             rv = task.rendezvous_pos or task.target_pos
             links.append((uav.pos, usv.pos, rv))
         return links
+
+    def usv_preference_hit_rate(self) -> float:
+        hits = 0.0
+        total = 0.0
+        for usv in self._usvs():
+            hits += usv.stats.get("softpart_hits", 0.0)
+            total += usv.stats.get("monitor_assign_count", 0.0)
+        if total <= 0.0:
+            return 0.0
+        return float(hits / total)
+
+    def usv_softpart_layout(self) -> list[dict[str, float]]:
+        layout: list[dict[str, float]] = []
+        for usv in sorted(self._usvs(), key=lambda a: a.agent_id):
+            layout.append(
+                {
+                    "left": float(usv.stats.get("preferred_band_left", 0.0)),
+                    "right": float(usv.stats.get("preferred_band_right", self.config.map_width)),
+                    "center_x": float(usv.stats.get("preferred_center_x", 0.0)),
+                    "center_y": float(usv.stats.get("preferred_center_y", 0.0)),
+                }
+            )
+        return layout
 
     def final_region_info(self) -> tuple[float, object]:
         final_t = self.history[-1]["time"] if self.history else 0.0

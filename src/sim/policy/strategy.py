@@ -8,9 +8,22 @@ from dataclasses import dataclass
 class BaseStrategy:
     seed: int
 
+    def pair_score(self, agent, task, region_info_map, t: float) -> float:
+        _ = (agent, task, region_info_map, t)
+        return -1e9
+
     def select_task(self, agent, tasks, region_info_map, t: float) -> int | None:
-        _ = (agent, tasks, region_info_map, t)
-        return None
+        if not tasks:
+            return None
+        best = max(
+            tasks,
+            key=lambda task: (
+                self.pair_score(agent, task, region_info_map, t),
+                -agent.distance_to(task.target_pos),
+                -task.task_id,
+            ),
+        )
+        return best.task_id
 
     def select_goal(self, agent, task, env, t: float) -> tuple[float, float] | None:
         _ = (agent, task, env, t)
@@ -22,13 +35,13 @@ class RandomCruiseStrategy(BaseStrategy):
         super().__init__(seed=seed)
         self._rng = random.Random(seed + 5001)
 
-    def select_task(self, agent, tasks, region_info_map, t: float) -> int | None:
-        _ = (agent, region_info_map, t)
-        if not tasks:
-            return None
-        ordered = sorted(tasks, key=lambda task: task.task_id)
-        idx = self._rng.randrange(len(ordered))
-        return ordered[idx].task_id
+    def pair_score(self, agent, task, region_info_map, t: float) -> float:
+        _ = region_info_map
+        # Deterministic pseudo-random score by seed+agent+task+time bucket.
+        bucket = int(round(t))
+        key = self.seed * 1000003 + _agent_num(agent.agent_id) * 917 + int(task.task_id) * 53 + bucket * 7
+        r = random.Random(key)
+        return r.random()
 
     def select_goal(self, agent, task, env, t: float) -> tuple[float, float] | None:
         _ = (agent, t)
@@ -48,15 +61,9 @@ class RandomCruiseStrategy(BaseStrategy):
 
 
 class NearestTaskStrategy(BaseStrategy):
-    def select_task(self, agent, tasks, region_info_map, t: float) -> int | None:
+    def pair_score(self, agent, task, region_info_map, t: float) -> float:
         _ = (region_info_map, t)
-        if not tasks:
-            return None
-        best = min(
-            tasks,
-            key=lambda task: (agent.distance_to(task.target_pos), task.task_id, agent.agent_id),
-        )
-        return best.task_id
+        return -agent.distance_to(task.target_pos)
 
     def select_goal(self, agent, task, env, t: float) -> tuple[float, float] | None:
         _ = (agent, env, t)
@@ -72,15 +79,11 @@ class PriorityTaskStrategy(BaseStrategy):
     LOW_BATTERY_TRIGGER: float = 0.45
     SWITCH_COST: float = 0.02
 
-    def select_task(self, agent, tasks, region_info_map, t: float) -> int | None:
+    def pair_score(self, agent, task, region_info_map, t: float) -> float:
         _ = (region_info_map, t)
-        if not tasks:
-            return None
-        candidates = list(tasks)
-
-        dist_map = {task.task_id: agent.distance_to(task.target_pos) for task in candidates}
-        max_dist = max(dist_map.values()) if dist_map else 1.0
-        max_dist = max(max_dist, 1.0)
+        dist = agent.distance_to(task.target_pos)
+        max_dist = max(1.0, 15000.0)
+        norm_dist = min(1.0, dist / max_dist)
 
         alpha = self.BASE_ALPHA
         beta = self.BASE_BETA
@@ -90,22 +93,12 @@ class PriorityTaskStrategy(BaseStrategy):
             beta = 2.0
 
         recharge_pressure = float(getattr(agent, "stats", {}).get("recharge_pressure", 0.0))
+        energy_risk = self._energy_risk(agent=agent, dist=dist, norm_dist=norm_dist)
+        if agent.agent_type == "USV":
+            energy_risk += recharge_pressure * (0.6 + 0.8 * norm_dist)
 
-        def score(task) -> tuple[float, float, float, int]:
-            dist = dist_map[task.task_id]
-            norm_dist = min(1.0, dist / max_dist)
-            energy_risk = self._energy_risk(agent=agent, dist=dist, norm_dist=norm_dist)
-            if agent.agent_type == "USV":
-                # If recharge pressure rises, suppress far monitor choices for USV.
-                energy_risk += recharge_pressure * (0.6 + 0.8 * norm_dist)
-
-            switch_cost = self._switch_cost(agent=agent, task=task)
-            task_score = self.PRIORITY_WEIGHT * float(task.priority) - alpha * norm_dist - beta * energy_risk - switch_cost
-            # max() with tuple: higher score first, then shorter distance, then smaller task_id.
-            return (task_score, -dist, -task.task_id, task.task_id)
-
-        best = max(candidates, key=score)
-        return best.task_id
+        switch_cost = self._switch_cost(agent=agent, task=task)
+        return self.PRIORITY_WEIGHT * float(task.priority) - alpha * norm_dist - beta * energy_risk - switch_cost
 
     def select_goal(self, agent, task, env, t: float) -> tuple[float, float] | None:
         _ = (agent, env, t)
@@ -121,13 +114,11 @@ class PriorityTaskStrategy(BaseStrategy):
         discharge = max(1e-6, float(getattr(agent, "discharge_rate", 1.0)))
         speed = max(1e-6, float(getattr(agent, "max_speed", 1.0)))
         battery_frac = float(getattr(agent, "battery_frac", 1.0))
-        expected_range = (battery / discharge) * speed
-        expected_range = max(1.0, expected_range)
+        expected_range = max(1.0, (battery / discharge) * speed)
         reach_ratio = dist / expected_range
 
         risk = max(0.0, reach_ratio - battery_frac)
         if battery_frac < self.LOW_BATTERY_TRIGGER and reach_ratio > 0.4:
-            # Extra penalty for low battery UAV picking far targets.
             risk += 0.8 * (reach_ratio - 0.4)
         return risk
 
@@ -144,7 +135,7 @@ class PriorityTaskStrategy(BaseStrategy):
         return self.SWITCH_COST
 
 
-def create_strategy(name: str, seed: int):
+def create_strategy(name: str, seed: int, config=None):
     key = (name or "").strip().lower()
     if key == "random":
         return RandomCruiseStrategy(seed=seed)
@@ -152,4 +143,15 @@ def create_strategy(name: str, seed: int):
         return NearestTaskStrategy(seed=seed)
     if key == "priority":
         return PriorityTaskStrategy(seed=seed)
+    if key == "multimetric":
+        from sim.policy.multimetric import MultiMetricStrategy
+
+        return MultiMetricStrategy(seed=seed, config=config)
     raise ValueError(f"unknown strategy: {name}")
+
+
+def _agent_num(agent_id: str) -> int:
+    digits = "".join(ch for ch in str(agent_id) if ch.isdigit())
+    if digits:
+        return int(digits)
+    return sum(ord(ch) for ch in str(agent_id))
