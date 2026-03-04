@@ -285,6 +285,14 @@ class Simulator:
     def _assign_idle_agents(self, t: float, log_select: bool = False) -> None:
         region_info = self.region_map.region_info_map(t)
         self.tasks.refresh_pending_priorities(region_info, t)
+        low_or_recharge_uav = [
+            uav
+            for uav in self._uavs()
+            if uav.is_low_battery() or self.tasks.find_recharge_task(uav.agent_id) is not None
+        ]
+        recharge_pressure = len(low_or_recharge_uav) / max(1.0, float(self.config.num_uav))
+        for usv in self._usvs():
+            usv.stats["recharge_pressure"] = recharge_pressure
 
         idle_agents = [agent for agent in self.agents if agent.alive and agent.current_task_id is None]
         filtered: list[UAVAgent | USVAgent] = []
@@ -298,10 +306,7 @@ class Simulator:
             filtered.append(agent)
         idle_agents = filtered
 
-        if self.config.strategy == "priority":
-            idle_agents.sort(key=lambda agent: (0 if agent.agent_type == "USV" else 1, agent.agent_id))
-        else:
-            idle_agents.sort(key=lambda agent: agent.agent_id)
+        idle_agents.sort(key=lambda agent: agent.agent_id)
 
         pending_monitor = self.tasks.get_pending_tasks(task_type="monitor")
         if not idle_agents or not pending_monitor:
@@ -331,6 +336,9 @@ class Simulator:
             agent.goal_pos = None
             agent.current_waypoints = []
             agent.current_wp_idx = 0
+            if picked.region_id is not None:
+                agent.stats["last_monitor_rx"] = float(picked.region_id[0])
+                agent.stats["last_monitor_ry"] = float(picked.region_id[1])
             self.transition_counts["assigned"] += 1
             del free_tasks[task_id]
 
