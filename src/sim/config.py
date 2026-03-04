@@ -69,12 +69,19 @@ COMM_RADIUS: float = 3000.0
 QUIVER_STEP: float = 500.0  # meters
 QUIVER_SCALE: float = 140.0  # display gain (arrow length multiplier)
 
+# Coverage grid parameters
+CELL_SIZE: float = 100.0  # meters
+DECAY_MODE: str = "exponential"  # "exponential" | "linear"
+DECAY_TAU: float = 1800.0  # seconds
+
 
 @dataclass
 class SimConfig:
     seed: int = RANDOM_SEED
     dt: float = 1.0
     steps: int = 200
+    num_uav: int = NUM_UAV
+    num_usv: int = NUM_USV
     map_width: float = MAP_WIDTH
     map_height: float = MAP_HEIGHT
     base_x: float | None = None
@@ -87,6 +94,8 @@ class SimConfig:
     risk_obstacle_count: int = 20
     risk_obstacle_radius_min: float = 80.0
     risk_obstacle_radius_max: float = 220.0
+    uav_sensor_radius: float = UAV_SENSOR_RADIUS
+    usv_sensor_radius: float = USV_SENSOR_RADIUS
     current_near: tuple[float, float] = CURRENT_NEAR
     current_risk: tuple[float, float] = CURRENT_RISK
     current_offshore: tuple[float, float] = CURRENT_OFFSHORE
@@ -100,6 +109,9 @@ class SimConfig:
     comm_radius: float = COMM_RADIUS
     quiver_step: float = QUIVER_STEP
     quiver_scale: float = QUIVER_SCALE
+    cell_size: float = CELL_SIZE
+    decay_mode: str = DECAY_MODE
+    decay_tau: float = DECAY_TAU
     runs_dir: str = "runs"
     run_name: str | None = None
 

@@ -122,14 +122,19 @@ def main() -> int:
     comm_circle.set_clip_path(sea_rect)
     ax.add_patch(comm_circle)
 
-    # current quiver (denser)
+    # current quiver
     points = env.field_grid_points(config.quiver_step)
-    cur_x = [p[0] for p in points]
-    cur_y = [p[1] for p in points]
+    cur_x: list[float] = []
+    cur_y: list[float] = []
     cur_u: list[float] = []
     cur_v: list[float] = []
     for px, py in points:
         vx, vy = env.current_at(px, py, args.time)
+        speed = (vx * vx + vy * vy) ** 0.5
+        if speed < 0.05:
+            continue
+        cur_x.append(px)
+        cur_y.append(py)
         cur_u.append(vx * config.quiver_scale)
         cur_v.append(vy * config.quiver_scale)
     ax.quiver(
@@ -138,21 +143,27 @@ def main() -> int:
         cur_u,
         cur_v,
         color="blue",
-        alpha=0.7,
+        alpha=0.8,
         angles="xy",
         scale_units="xy",
         scale=2.0,
         width=0.002,
+        linewidths=1.0,
     )
 
     # wind quiver (sparser)
     wind_points = env.field_grid_points(config.quiver_step * 2.0)
-    wind_x = [p[0] for p in wind_points]
-    wind_y = [p[1] for p in wind_points]
+    wind_x: list[float] = []
+    wind_y: list[float] = []
     wind_u: list[float] = []
     wind_v: list[float] = []
     for px, py in wind_points:
         wx, wy = env.wind_at(px, py, args.time)
+        speed = (wx * wx + wy * wy) ** 0.5
+        if speed < 0.05:
+            continue
+        wind_x.append(px)
+        wind_y.append(py)
         wind_u.append(wx * config.quiver_scale * 0.6)
         wind_v.append(wy * config.quiver_scale * 0.6)
     ax.quiver(
@@ -161,21 +172,13 @@ def main() -> int:
         wind_u,
         wind_v,
         color="green",
-        alpha=0.4,
+        alpha=0.8,
         angles="xy",
         scale_units="xy",
         scale=2.0,
         width=0.0018,
+        linewidths=1.0,
     )
-
-    # demo points for sampling API
-    for region, marker, color in (
-        ("nearshore", "o", "#2E8B57"),
-        ("risk_zone", "s", "#FF8C00"),
-        ("offshore", "^", "#1E90FF"),
-    ):
-        x, y = env.sample_point(region)
-        ax.scatter([x], [y], marker=marker, s=40, color=color)
 
     ax.scatter([bx], [by], marker="*", s=200, color="black", label="base")
     ax.text(bx + 120.0, by + 120.0, "Base", fontsize=10, color="black")

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Minimal simulation skeleton for heterogeneous ocean monitoring agents."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["matplotlib>=3.7"]
+dependencies = ["matplotlib>=3.7", "numpy>=1.24"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
