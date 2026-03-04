@@ -135,6 +135,9 @@ ALLOW_USV_PREEMPT_MONITOR_FOR_RECHARGE: bool = True
 # Step9 feedback layer parameters
 ENABLE_FEEDBACK: bool = True
 FB_COOLDOWN_SEC: float = 120.0
+FB_COOLDOWN_RELAX: float = 300.0
+FB_COOLDOWN_REASSIGN: float = 300.0
+FB_COOLDOWN_RECHARGE_BOOST: float = 300.0
 FB_PENDING_HIGH_FRAC: float = 0.90
 FB_MEANINFO_LOW: float = 0.06
 FB_P5INFO_LOW: float = 0.03
@@ -236,6 +239,9 @@ class SimConfig:
     allow_usv_preempt_monitor_for_recharge: bool = ALLOW_USV_PREEMPT_MONITOR_FOR_RECHARGE
     enable_feedback: bool = ENABLE_FEEDBACK
     fb_cooldown_sec: float = FB_COOLDOWN_SEC
+    fb_cooldown_relax: float = FB_COOLDOWN_RELAX
+    fb_cooldown_reassign: float = FB_COOLDOWN_REASSIGN
+    fb_cooldown_recharge_boost: float = FB_COOLDOWN_RECHARGE_BOOST
     fb_pending_high_frac: float = FB_PENDING_HIGH_FRAC
     fb_meaninfo_low: float = FB_MEANINFO_LOW
     fb_p5info_low: float = FB_P5INFO_LOW

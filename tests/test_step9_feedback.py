@@ -42,7 +42,13 @@ def test_relax_softpart_trigger() -> None:
 
 
 def test_cooldown() -> None:
-    cfg = SimConfig(enable_feedback=True, fb_cooldown_sec=120.0, fb_meaninfo_low=0.08, fb_p5info_low=0.05)
+    cfg = SimConfig(
+        enable_feedback=True,
+        fb_cooldown_sec=120.0,
+        fb_cooldown_relax=120.0,
+        fb_meaninfo_low=0.08,
+        fb_p5info_low=0.05,
+    )
     controller = FeedbackController(cfg)
 
     first = controller.step(

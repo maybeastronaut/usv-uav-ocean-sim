@@ -44,6 +44,7 @@ class FeedbackController:
     def __init__(self, config: Any) -> None:
         self.config = config
         self.cooldown_until: dict[str, float] = {}
+        self.reason_cooldown_until: dict[tuple[str, str], float] = {}
         self.recent_metrics: list[dict[str, float]] = []
 
     def step(self, metrics: dict[str, float], sim_state: Any) -> list[dict[str, Any]]:
@@ -64,18 +65,24 @@ class FeedbackController:
         actions: list[dict[str, Any]] = []
 
         if pending_high or (mean_low and pending_rising):
-            if self._ready("GLOBAL_REASSIGN", t):
+            reason = "pending_high" if pending_high else "coverage_drop_pending_rising"
+            if self._ready("GLOBAL_REASSIGN", t) and self._reason_ready("GLOBAL_REASSIGN", reason, t):
                 actions.append(
                     {
                         "type": "GLOBAL_REASSIGN",
-                        "reason": "pending_high" if pending_high else "coverage_drop_pending_rising",
+                        "reason": reason,
                         "mode": str(self.config.fb_reassign_mode),
                     }
                 )
                 self._touch("GLOBAL_REASSIGN", t)
+                self._touch_reason("GLOBAL_REASSIGN", reason, t)
 
         if pending_high or mean_low or p5_low:
-            if self._ready("RELAX_SOFTPART", t):
+            if (
+                self._ready("RELAX_SOFTPART", t)
+                and self._reason_ready("RELAX_SOFTPART", "pending_or_coverage_low", t)
+                and not self._relax_active(sim_state, t)
+            ):
                 actions.append(
                     {
                         "type": "RELAX_SOFTPART",
@@ -85,9 +92,14 @@ class FeedbackController:
                     }
                 )
                 self._touch("RELAX_SOFTPART", t)
+                self._touch_reason("RELAX_SOFTPART", "pending_or_coverage_low", t)
 
         if energy_pressure:
-            if self._ready("BOOST_RECHARGE_PRIORITY", t):
+            if (
+                self._ready("BOOST_RECHARGE_PRIORITY", t)
+                and self._reason_ready("BOOST_RECHARGE_PRIORITY", "energy_pressure", t)
+                and not self._recharge_boost_active(sim_state, t)
+            ):
                 actions.append(
                     {
                         "type": "BOOST_RECHARGE_PRIORITY",
@@ -97,6 +109,7 @@ class FeedbackController:
                     }
                 )
                 self._touch("BOOST_RECHARGE_PRIORITY", t)
+                self._touch_reason("BOOST_RECHARGE_PRIORITY", "energy_pressure", t)
 
         return actions
 
@@ -111,4 +124,35 @@ class FeedbackController:
         return t >= self.cooldown_until.get(action_type, -math.inf)
 
     def _touch(self, action_type: str, t: float) -> None:
-        self.cooldown_until[action_type] = t + float(self.config.fb_cooldown_sec)
+        self.cooldown_until[action_type] = t + self._cooldown_for(action_type)
+
+    def _reason_ready(self, action_type: str, reason: str, t: float) -> bool:
+        return t >= self.reason_cooldown_until.get((action_type, reason), -math.inf)
+
+    def _touch_reason(self, action_type: str, reason: str, t: float) -> None:
+        self.reason_cooldown_until[(action_type, reason)] = t + self._cooldown_for(action_type)
+
+    def _cooldown_for(self, action_type: str) -> float:
+        if action_type == "RELAX_SOFTPART":
+            return float(getattr(self.config, "fb_cooldown_relax", self.config.fb_cooldown_sec))
+        if action_type == "GLOBAL_REASSIGN":
+            return float(getattr(self.config, "fb_cooldown_reassign", self.config.fb_cooldown_sec))
+        if action_type == "BOOST_RECHARGE_PRIORITY":
+            return float(getattr(self.config, "fb_cooldown_recharge_boost", self.config.fb_cooldown_sec))
+        return float(self.config.fb_cooldown_sec)
+
+    def _relax_active(self, sim_state: Any, t: float) -> bool:
+        if sim_state is None:
+            return False
+        checker = getattr(sim_state, "_feedback_relax_active", None)
+        if callable(checker):
+            return bool(checker(t))
+        return False
+
+    def _recharge_boost_active(self, sim_state: Any, t: float) -> bool:
+        if sim_state is None:
+            return False
+        checker = getattr(sim_state, "_feedback_recharge_boost_active", None)
+        if callable(checker):
+            return bool(checker(t))
+        return False

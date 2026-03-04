@@ -690,9 +690,12 @@ class Simulator:
                 {"t": float(t), "action": action_type, "reason": reason, "duration": duration}
             )
             self.transition_counts["fb_trigger_count_cum"] += 1
+            cooldown_remaining = self._feedback_cooldown_remaining("RELAX_SOFTPART", t)
+            duration_remaining = max(0.0, self.feedback_softpart_override_until - t)
             print(
                 f"[FB] t={t:.1f}s action={action_type} reason={reason} "
-                f"duration={duration:.1f}s scale={self.feedback_softpart_override_scale:.2f}"
+                f"duration={duration:.1f}s scale={self.feedback_softpart_override_scale:.2f} "
+                f"cooldown_remaining={cooldown_remaining:.1f}s duration_remaining={duration_remaining:.1f}s"
             )
             return
 
@@ -704,9 +707,12 @@ class Simulator:
                 {"t": float(t), "action": action_type, "reason": reason, "duration": duration}
             )
             self.transition_counts["fb_trigger_count_cum"] += 1
+            cooldown_remaining = self._feedback_cooldown_remaining("BOOST_RECHARGE_PRIORITY", t)
+            duration_remaining = max(0.0, self.feedback_recharge_boost_until - t)
             print(
                 f"[FB] t={t:.1f}s action={action_type} reason={reason} "
-                f"duration={duration:.1f}s mult={self.feedback_recharge_boost_mult:.2f}"
+                f"duration={duration:.1f}s mult={self.feedback_recharge_boost_mult:.2f} "
+                f"cooldown_remaining={cooldown_remaining:.1f}s duration_remaining={duration_remaining:.1f}s"
             )
             return
 
@@ -742,9 +748,11 @@ class Simulator:
                 {"t": float(t), "action": action_type, "reason": reason, "mode": mode, "released": released}
             )
             self.transition_counts["fb_trigger_count_cum"] += 1
+            cooldown_remaining = self._feedback_cooldown_remaining("GLOBAL_REASSIGN", t)
             print(
                 f"[FB] t={t:.1f}s action={action_type} reason={reason} "
-                f"mode={mode} released={released}"
+                f"mode={mode} released={released} "
+                f"cooldown_remaining={cooldown_remaining:.1f}s duration_remaining=0.0s"
             )
             return
 
@@ -768,6 +776,12 @@ class Simulator:
         if not self.feedback_events:
             return None
         return self.feedback_events[-1]
+
+    def _feedback_cooldown_remaining(self, action_type: str, t: float) -> float:
+        if self.feedback_controller is None:
+            return 0.0
+        until = float(self.feedback_controller.cooldown_until.get(action_type, t))
+        return max(0.0, until - t)
 
     def _safe_rendezvous(self, uav: UAVAgent, usv: USVAgent | None) -> tuple[float, float]:
         if usv is None or uav.is_critical():
