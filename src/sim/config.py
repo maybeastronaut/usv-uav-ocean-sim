@@ -74,6 +74,18 @@ CELL_SIZE: float = 100.0  # meters
 DECAY_MODE: str = "exponential"  # "exponential" | "linear"
 DECAY_TAU: float = 1800.0  # seconds
 
+# Region-task aggregation parameters
+REGION_CELL_SIZE: float = 1000.0  # meters
+REGION_AGG_MODE: str = "mean"  # "mean" | "min" | "p5"
+TASK_INFO_THRESHOLD: float = 0.3  # generate task when region_info < threshold
+REGION_TASK_COOLDOWN: float = 300.0  # seconds
+TASK_COOLDOWN: float = REGION_TASK_COOLDOWN  # backward-compatible alias
+MAX_PENDING_TASKS: int = 100
+MAX_NEW_TASKS_PER_TICK: int = 5
+NEARSHORE_TASK_WEIGHT: float = 1.2
+RISK_TASK_WEIGHT: float = 1.0
+OFFSHORE_TASK_WEIGHT: float = 0.8
+
 
 @dataclass
 class SimConfig:
@@ -112,6 +124,16 @@ class SimConfig:
     cell_size: float = CELL_SIZE
     decay_mode: str = DECAY_MODE
     decay_tau: float = DECAY_TAU
+    region_cell_size: float = REGION_CELL_SIZE
+    region_agg_mode: str = REGION_AGG_MODE
+    task_info_threshold: float = TASK_INFO_THRESHOLD
+    region_task_cooldown: float = REGION_TASK_COOLDOWN
+    task_cooldown: float = TASK_COOLDOWN
+    max_pending_tasks: int = MAX_PENDING_TASKS
+    max_new_tasks_per_tick: int = MAX_NEW_TASKS_PER_TICK
+    nearshore_task_weight: float = NEARSHORE_TASK_WEIGHT
+    risk_task_weight: float = RISK_TASK_WEIGHT
+    offshore_task_weight: float = OFFSHORE_TASK_WEIGHT
     runs_dir: str = "runs"
     run_name: str | None = None
 
