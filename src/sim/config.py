@@ -116,8 +116,8 @@ W_ENERGY: float = 0.90
 W_SOFTPART: float = 0.20
 SOFTPART_SIGMA: float = 1200.0  # meters
 PENDING_CROSS_THRESHOLD: int = 85
-PENDING_CROSS_THRESHOLD_FRAC: float = 0.85  # if pending > frac * MAX_PENDING_TASKS, soften partition
-MEANINFO_CROSS_THRESHOLD: float = 0.08
+PENDING_CROSS_THRESHOLD_FRAC: float = 0.95  # if pending > frac * MAX_PENDING_TASKS, soften partition
+MEANINFO_CROSS_THRESHOLD: float = 0.03
 SOFTPART_CROSS_SCALE: float = 0.70  # effective soft-partition weight scale under high pressure
 RISK_ZONE_PENALTY: float = 1.0
 

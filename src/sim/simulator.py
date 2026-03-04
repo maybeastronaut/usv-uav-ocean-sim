@@ -313,7 +313,8 @@ class Simulator:
             )
         )
         pending_trigger = pending_count > int(round(pending_frac_threshold * self.config.max_pending_tasks))
-        if pending_trigger or mean_info_now < self.config.meaninfo_cross_threshold:
+        cross_trigger = pending_trigger or mean_info_now < self.config.meaninfo_cross_threshold
+        if cross_trigger:
             soft_scale = self.config.softpart_cross_scale
         if self.config.ablate_softpart:
             soft_scale = 0.0
@@ -354,7 +355,16 @@ class Simulator:
 
             for agent_id in sorted(free_agents):
                 agent = free_agents[agent_id]
-                for task_id in sorted(free_tasks):
+                candidate_task_ids = sorted(free_tasks)
+                if isinstance(agent, USVAgent) and (not self.config.ablate_softpart) and (not cross_trigger):
+                    preferred_ids = [
+                        task_id
+                        for task_id in candidate_task_ids
+                        if self._task_in_usv_preferred_band(agent, free_tasks[task_id])
+                    ]
+                    if preferred_ids:
+                        candidate_task_ids = preferred_ids
+                for task_id in candidate_task_ids:
                     task = free_tasks[task_id]
                     pair_score = float(self.strategy.pair_score(agent, task, region_info, t))
                     if not math.isfinite(pair_score):
@@ -658,13 +668,19 @@ class Simulator:
         stats = usv.stats
         stats["monitor_assign_count"] = stats.get("monitor_assign_count", 0.0) + 1.0
         tx = float(task.target_pos[0])
-        left = float(stats.get("preferred_band_left", 0.0))
-        right = float(stats.get("preferred_band_right", self.config.map_width))
-        hit = left <= tx < right or (abs(tx - self.config.map_width) <= 1e-6 and abs(right - self.config.map_width) <= 1e-6)
+        hit = self._x_in_usv_preferred_band(usv, tx)
         if hit:
             stats["softpart_hits"] = stats.get("softpart_hits", 0.0) + 1.0
         cx = float(stats.get("preferred_center_x", tx))
         stats["pref_distance_sum"] = stats.get("pref_distance_sum", 0.0) + abs(tx - cx)
+
+    def _x_in_usv_preferred_band(self, usv: USVAgent, x: float) -> bool:
+        left = float(usv.stats.get("preferred_band_left", 0.0))
+        right = float(usv.stats.get("preferred_band_right", self.config.map_width))
+        return left <= x < right or (abs(x - self.config.map_width) <= 1e-6 and abs(right - self.config.map_width) <= 1e-6)
+
+    def _task_in_usv_preferred_band(self, usv: USVAgent, task: Task) -> bool:
+        return self._x_in_usv_preferred_band(usv, float(task.target_pos[0]))
 
     def _select_recharge_usv(self, uav: UAVAgent, exclude_task_id: int | None) -> USVAgent | None:
         busy_usv_ids: set[str] = set()
@@ -776,6 +792,17 @@ class Simulator:
         if total <= 0.0:
             return 0.0
         return float(hits / total)
+
+    def usv_cross_band_ratio(self) -> float:
+        hits = 0.0
+        total = 0.0
+        for usv in self._usvs():
+            hits += usv.stats.get("softpart_hits", 0.0)
+            total += usv.stats.get("monitor_assign_count", 0.0)
+        if total <= 0.0:
+            return 0.0
+        cross = max(0.0, total - hits)
+        return float(cross / total)
 
     def usv_softpart_layout(self) -> list[dict[str, float]]:
         layout: list[dict[str, float]] = []
