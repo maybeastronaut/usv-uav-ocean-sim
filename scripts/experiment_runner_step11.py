@@ -39,11 +39,20 @@ RESULT_FIELDS = [
     "pending_end",
     "total_distance_usv",
     "total_distance_uav",
+    "total_distance_all",
+    "total_energy_usv",
+    "total_energy_uav",
+    "total_energy_all",
     "recharge_count",
     "uav_dead_count",
     "fb_trigger_count",
+    "baseline_pre",
+    "threshold_recover",
+    "recovered",
     "recovery_time_sec",
     "mean_min_after_failure",
+    "info_per_distance",
+    "done_per_distance",
 ]
 
 NUMERIC_SUMMARY_FIELDS = [
@@ -54,11 +63,19 @@ NUMERIC_SUMMARY_FIELDS = [
     "pending_end",
     "total_distance_usv",
     "total_distance_uav",
+    "total_distance_all",
+    "total_energy_usv",
+    "total_energy_uav",
+    "total_energy_all",
     "recharge_count",
     "uav_dead_count",
     "fb_trigger_count",
+    "baseline_pre",
+    "threshold_recover",
     "recovery_time_sec",
     "mean_min_after_failure",
+    "info_per_distance",
+    "done_per_distance",
 ]
 
 
@@ -70,6 +87,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duration", type=float, default=None)
     parser.add_argument("--parallel", type=int, default=0, choices=[0, 1])
     parser.add_argument("--no-plots", action="store_true")
+    parser.add_argument("--low-load", action="store_true")
+    parser.add_argument("--sim-dt", type=float, default=None)
+    parser.add_argument("--timeseries-stride", type=int, default=1)
+    parser.add_argument("--energy-proxy-k", type=float, default=1.0)
+    parser.add_argument("--recovery-pre-window", type=float, default=300.0)
+    parser.add_argument("--recovery-hold-sec", type=float, default=120.0)
+    parser.add_argument("--recovery-ratio", type=float, default=0.95)
     return parser.parse_args()
 
 
@@ -124,7 +148,6 @@ def build_cases(exp: str, seeds_override: list[int] | None, duration_override: f
                     failure_usv=1,
                 )
 
-        # optional weak baseline (single seed)
         weak_seed = seeds[0]
         add_case(
             exp_name="exp2",
@@ -161,18 +184,67 @@ def build_cases(exp: str, seeds_override: list[int] | None, duration_override: f
     return cases
 
 
-def _series_recovery_time(history: list[dict[str, float]], fail_t: float) -> float:
-    pre = [row["mean_info_all"] for row in history if row["time"] < fail_t]
-    if not pre:
-        return math.inf
-    pre_mean = float(sum(pre[-5:]) / min(5, len(pre)))
-    target = 0.95 * pre_mean
-    for row in history:
-        if row["time"] < fail_t:
+def _sample_indices(n: int, stride: int) -> np.ndarray:
+    if n <= 0:
+        return np.array([], dtype=int)
+    step = max(1, int(stride))
+    idx = np.arange(0, n, step, dtype=int)
+    if idx[-1] != n - 1:
+        idx = np.append(idx, n - 1)
+    return idx
+
+
+def _compute_recovery_metrics(
+    history: list[dict[str, float]],
+    fail_t: float,
+    duration: float,
+    *,
+    pre_window: float,
+    hold_sec: float,
+    recover_ratio: float,
+) -> dict[str, Any]:
+    times = np.array([row["time"] for row in history], dtype=float)
+    means = np.array([row["mean_info_all"] for row in history], dtype=float)
+    if times.size == 0:
+        return {
+            "baseline_pre": 0.0,
+            "threshold_recover": 0.0,
+            "recovered": False,
+            "recovery_time_sec": max(0.0, duration - fail_t),
+        }
+
+    pre_mask = (times >= fail_t - pre_window) & (times < fail_t)
+    pre_vals = means[pre_mask]
+    if pre_vals.size == 0:
+        older = means[times < fail_t]
+        pre_vals = older[-5:] if older.size > 0 else means[:1]
+
+    baseline_pre = float(np.mean(pre_vals)) if pre_vals.size > 0 else float(means[0])
+    threshold = float(recover_ratio * baseline_pre)
+
+    recovered = False
+    recovery_time = max(0.0, duration - fail_t)
+
+    for i, t0 in enumerate(times):
+        if t0 <= fail_t + 1e-9:
             continue
-        if row["mean_info_all"] >= target:
-            return float(row["time"] - fail_t)
-    return math.inf
+        tend = t0 + hold_sec
+        if tend > times[-1] + 1e-9:
+            break
+        hold_mask = (times >= t0 - 1e-9) & (times <= tend + 1e-9)
+        if not np.any(hold_mask):
+            continue
+        if np.all(means[hold_mask] >= threshold):
+            recovered = True
+            recovery_time = float(max(0.0, t0 - fail_t))
+            break
+
+    return {
+        "baseline_pre": baseline_pre,
+        "threshold_recover": threshold,
+        "recovered": recovered,
+        "recovery_time_sec": recovery_time,
+    }
 
 
 def _series_min_after_failure(history: list[dict[str, float]], fail_t: float, window: float = 200.0) -> float:
@@ -191,11 +263,21 @@ def _timeseries_filename(case: dict[str, Any]) -> str:
     )
 
 
-def run_single_case(case: dict[str, Any], outdir: str) -> dict[str, Any]:
+def run_single_case(
+    case: dict[str, Any],
+    outdir: str,
+    *,
+    sim_dt: float,
+    timeseries_stride: int,
+    energy_proxy_k: float,
+    recovery_pre_window: float,
+    recovery_hold_sec: float,
+    recovery_ratio: float,
+) -> dict[str, Any]:
     cfg = SimConfig(
         seed=int(case["seed"]),
         t_end=float(case["duration"]),
-        sim_dt=5.0,
+        sim_dt=float(sim_dt),
         strategy=str(case["policy"]),
         task_policy=str(case["policy"]),
         enable_feedback=bool(case["enable_feedback"]),
@@ -218,36 +300,74 @@ def run_single_case(case: dict[str, Any], outdir: str) -> dict[str, Any]:
     final = history[-1]
     mean_series = np.array([row["mean_info_all"] for row in history], dtype=float)
 
+    baseline_pre_val: float | str = ""
+    threshold_recover_val: float | str = ""
+    recovered_val: int | str = ""
     recovery_val: float | str = ""
     mean_after_fail_val: float | str = ""
     if bool(case["enable_failures"]):
         fail_t = float(case["failure_t"] or 600.0)
-        recovery = _series_recovery_time(history, fail_t)
+        recovery = _compute_recovery_metrics(
+            history,
+            fail_t,
+            float(case["duration"]),
+            pre_window=recovery_pre_window,
+            hold_sec=recovery_hold_sec,
+            recover_ratio=recovery_ratio,
+        )
         mean_after_fail = _series_min_after_failure(history, fail_t, window=200.0)
-        recovery_val = "" if math.isinf(recovery) else float(recovery)
+        baseline_pre_val = float(recovery["baseline_pre"])
+        threshold_recover_val = float(recovery["threshold_recover"])
+        recovered_val = int(bool(recovery["recovered"]))
+        recovery_val = float(recovery["recovery_time_sec"])
         mean_after_fail_val = float(mean_after_fail)
 
-    total_distance_uav = sum(agent.stats.get("distance", 0.0) for agent in sim._uavs())
-    total_distance_usv = sum(agent.stats.get("distance", 0.0) for agent in sim._usvs())
+    total_distance_uav = float(sum(agent.stats.get("distance", 0.0) for agent in sim._uavs()))
+    total_distance_usv = float(sum(agent.stats.get("distance", 0.0) for agent in sim._usvs()))
+    total_distance_all = float(total_distance_uav + total_distance_usv)
+
+    # Step12: if no explicit energy model is exposed here, use distance-based proxy.
+    e_k = float(energy_proxy_k)
+    total_energy_uav = float(total_distance_uav * e_k)
+    total_energy_usv = float(total_distance_usv * e_k)
+    total_energy_all = float(total_distance_all * e_k)
+
+    eps = 1e-9
+    info_per_distance = float(final["mean_info_all"]) / (total_distance_all + eps)
+    done_per_distance = float(final["done_count"]) / (total_distance_all + eps)
 
     outdir_path = Path(outdir)
     ts_dir = outdir_path / "timeseries"
     ts_dir.mkdir(parents=True, exist_ok=True)
     ts_path = ts_dir / _timeseries_filename(case)
+
+    idx = _sample_indices(len(history), timeseries_stride)
+    time_arr = np.array([history[i]["time"] for i in idx], dtype=float)
+    mean_arr = np.array([history[i]["mean_info_all"] for i in idx], dtype=float)
+    pending_arr = np.array([history[i]["pending_count"] for i in idx], dtype=float)
+    done_arr = np.array([history[i]["done_count"] for i in idx], dtype=float)
+    recharge_arr = np.array([history[i]["recharge_count_cum"] for i in idx], dtype=float)
+    fb_arr = np.array([history[i].get("fb_trigger_count_cum", 0.0) for i in idx], dtype=float)
+    disabled_arr = np.array([history[i].get("num_usv_disabled", 0.0) for i in idx], dtype=float)
+
     np.savez_compressed(
         ts_path,
-        time=np.array([row["time"] for row in history], dtype=float),
-        mean_info_all=mean_series,
-        pending_count=np.array([row["pending_count"] for row in history], dtype=float),
-        done_count=np.array([row["done_count"] for row in history], dtype=float),
-        recharge_count=np.array([row["recharge_count_cum"] for row in history], dtype=float),
-        fb_trigger_count=np.array([row.get("fb_trigger_count_cum", 0.0) for row in history], dtype=float),
-        num_usv_disabled=np.array([row.get("num_usv_disabled", 0.0) for row in history], dtype=float),
+        time=time_arr,
+        mean_info_all=mean_arr,
+        pending_count=pending_arr,
+        done_count=done_arr,
+        recharge_count=recharge_arr,
+        fb_trigger_count=fb_arr,
+        num_usv_disabled=disabled_arr,
         exp_name=np.array(str(case["exp_name"])),
         policy=np.array(str(case["policy"])),
         seed=np.array(int(case["seed"])),
         enable_robust_response=np.array(int(bool(case["enable_robust_response"]))),
         failure_t=np.array(float(case["failure_t"] or -1.0)),
+        baseline_pre=np.array(float(baseline_pre_val) if baseline_pre_val != "" else np.nan),
+        threshold_recover=np.array(float(threshold_recover_val) if threshold_recover_val != "" else np.nan),
+        recovered=np.array(int(recovered_val) if recovered_val != "" else -1),
+        recovery_time_sec=np.array(float(recovery_val) if recovery_val != "" else np.nan),
     )
 
     row = {
@@ -266,13 +386,22 @@ def run_single_case(case: dict[str, Any], outdir: str) -> dict[str, Any]:
         "mean_info_all_p5": float(np.percentile(mean_series, 5)),
         "done_count": int(final["done_count"]),
         "pending_end": int(final["pending_count"]),
-        "total_distance_usv": float(total_distance_usv),
-        "total_distance_uav": float(total_distance_uav),
+        "total_distance_usv": total_distance_usv,
+        "total_distance_uav": total_distance_uav,
+        "total_distance_all": total_distance_all,
+        "total_energy_usv": total_energy_usv,
+        "total_energy_uav": total_energy_uav,
+        "total_energy_all": total_energy_all,
         "recharge_count": int(final.get("recharge_count_cum", 0.0)),
         "uav_dead_count": int(final.get("uav_dead_count", 0.0)),
         "fb_trigger_count": int(final.get("fb_trigger_count_cum", 0.0)),
+        "baseline_pre": baseline_pre_val,
+        "threshold_recover": threshold_recover_val,
+        "recovered": recovered_val,
         "recovery_time_sec": recovery_val,
         "mean_min_after_failure": mean_after_fail_val,
+        "info_per_distance": info_per_distance,
+        "done_per_distance": done_per_distance,
     }
     return row
 
@@ -320,6 +449,10 @@ def build_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "duration": duration,
             "n_runs": len(items),
         }
+
+        recovered_values = [v for v in (_to_float(item.get("recovered")) for item in items) if v is not None]
+        out["recovered_rate"] = float(np.mean(np.array(recovered_values, dtype=float))) if recovered_values else ""
+
         for metric in NUMERIC_SUMMARY_FIELDS:
             values = [v for v in (_to_float(item.get(metric)) for item in items) if v is not None]
             if not values:
@@ -350,7 +483,15 @@ def write_summary_csv(summary_rows: list[dict[str, Any]], summary_path: Path) ->
             f.write("")
         return
 
-    base_fields = ["exp_name", "policy", "enable_robust_response", "enable_failures", "duration", "n_runs"]
+    base_fields = [
+        "exp_name",
+        "policy",
+        "enable_robust_response",
+        "enable_failures",
+        "duration",
+        "n_runs",
+        "recovered_rate",
+    ]
     metric_fields: list[str] = []
     for metric in NUMERIC_SUMMARY_FIELDS:
         metric_fields.extend([f"{metric}_mean", f"{metric}_std", f"{metric}_sem", f"{metric}_ci95"])
@@ -371,6 +512,13 @@ def run_experiments(
     duration_override: float | None,
     parallel: bool,
     no_plots: bool,
+    low_load: bool,
+    sim_dt_override: float | None,
+    timeseries_stride: int,
+    energy_proxy_k: float,
+    recovery_pre_window: float,
+    recovery_hold_sec: float,
+    recovery_ratio: float,
 ) -> tuple[Path, Path]:
     cases = build_cases(exp=exp, seeds_override=seeds_override, duration_override=duration_override)
     if not cases:
@@ -379,12 +527,30 @@ def run_experiments(
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "timeseries").mkdir(parents=True, exist_ok=True)
 
+    sim_dt = float(sim_dt_override if sim_dt_override is not None else (10.0 if low_load else 5.0))
+    stride = max(1, int(timeseries_stride))
+    if low_load:
+        stride = max(stride, 2)
+
     rows: list[dict[str, Any]] = []
     total = len(cases)
     if parallel:
         max_workers = min(4, os.cpu_count() or 1)
         with ProcessPoolExecutor(max_workers=max_workers) as ex:
-            futures = [ex.submit(run_single_case, case, str(outdir)) for case in cases]
+            futures = [
+                ex.submit(
+                    run_single_case,
+                    case,
+                    str(outdir),
+                    sim_dt=sim_dt,
+                    timeseries_stride=stride,
+                    energy_proxy_k=energy_proxy_k,
+                    recovery_pre_window=recovery_pre_window,
+                    recovery_hold_sec=recovery_hold_sec,
+                    recovery_ratio=recovery_ratio,
+                )
+                for case in cases
+            ]
             for idx, fut in enumerate(futures, start=1):
                 row = fut.result()
                 rows.append(row)
@@ -394,7 +560,16 @@ def run_experiments(
                 )
     else:
         for idx, case in enumerate(cases, start=1):
-            row = run_single_case(case, str(outdir))
+            row = run_single_case(
+                case,
+                str(outdir),
+                sim_dt=sim_dt,
+                timeseries_stride=stride,
+                energy_proxy_k=energy_proxy_k,
+                recovery_pre_window=recovery_pre_window,
+                recovery_hold_sec=recovery_hold_sec,
+                recovery_ratio=recovery_ratio,
+            )
             rows.append(row)
             print(
                 f"[STEP11] {idx}/{total} {row['exp_name']} policy={row['policy']} "
@@ -409,8 +584,11 @@ def run_experiments(
     write_summary_csv(summary_rows, summary_path)
 
     if not no_plots:
+        env = dict(os.environ)
+        env.setdefault("PYTHONPYCACHEPREFIX", "/tmp/pycache")
+        env.setdefault("MPLCONFIGDIR", str(ROOT / ".mplcache"))
         plot_cmd = [sys.executable, str(ROOT / "scripts" / "plot_step11.py"), "--outdir", str(outdir)]
-        subprocess.run(plot_cmd, check=True)
+        subprocess.run(plot_cmd, check=True, env=env)
 
     return results_path, summary_path
 
@@ -429,6 +607,13 @@ def main() -> int:
         duration_override=duration_override,
         parallel=parallel,
         no_plots=bool(args.no_plots),
+        low_load=bool(args.low_load),
+        sim_dt_override=args.sim_dt,
+        timeseries_stride=args.timeseries_stride,
+        energy_proxy_k=float(args.energy_proxy_k),
+        recovery_pre_window=float(args.recovery_pre_window),
+        recovery_hold_sec=float(args.recovery_hold_sec),
+        recovery_ratio=float(args.recovery_ratio),
     )
 
     print(f"RESULTS={results_path}")
