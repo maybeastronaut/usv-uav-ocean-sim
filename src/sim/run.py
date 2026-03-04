@@ -15,8 +15,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0, help="Random seed.")
     parser.add_argument("--steps", type=int, default=200, help="Simulation steps.")
     parser.add_argument("--dt", type=float, default=1.0, help="Time delta per step.")
-    parser.add_argument("--map-width", type=float, default=1000.0, help="Map width placeholder.")
-    parser.add_argument("--map-height", type=float, default=1000.0, help="Map height placeholder.")
+    parser.add_argument("--map-width", type=float, default=10000.0, help="Map width placeholder.")
+    parser.add_argument("--map-height", type=float, default=10000.0, help="Map height placeholder.")
+    parser.add_argument("--base-x", type=float, default=None, help="Base x position.")
+    parser.add_argument("--base-y", type=float, default=None, help="Base y position.")
+    parser.add_argument("--nearshore-y-max", type=float, default=2000.0, help="Nearshore band upper y.")
+    parser.add_argument("--risk-zone-y-min", type=float, default=2000.0, help="Risk band lower y.")
+    parser.add_argument("--risk-zone-y-max", type=float, default=6000.0, help="Risk band upper y.")
+    parser.add_argument("--offshore-y-min", type=float, default=6000.0, help="Offshore band lower y.")
+    parser.add_argument("--offshore-y-max", type=float, default=10000.0, help="Offshore band upper y.")
+    parser.add_argument("--risk-obstacle-count", type=int, default=20, help="Number of risk-zone obstacles.")
+    parser.add_argument(
+        "--risk-obstacle-radius-min",
+        type=float,
+        default=80.0,
+        help="Minimum risk-zone obstacle radius.",
+    )
+    parser.add_argument(
+        "--risk-obstacle-radius-max",
+        type=float,
+        default=220.0,
+        help="Maximum risk-zone obstacle radius.",
+    )
     parser.add_argument("--runs-dir", type=str, default="runs", help="Root directory for run outputs.")
     parser.add_argument("--run-name", type=str, default=None, help="Optional explicit run directory name.")
     return parser.parse_args()
@@ -60,6 +80,16 @@ def main() -> int:
         steps=args.steps,
         map_width=args.map_width,
         map_height=args.map_height,
+        base_x=args.base_x,
+        base_y=args.base_y,
+        nearshore_y_max=args.nearshore_y_max,
+        risk_zone_y_min=args.risk_zone_y_min,
+        risk_zone_y_max=args.risk_zone_y_max,
+        offshore_y_min=args.offshore_y_min,
+        offshore_y_max=args.offshore_y_max,
+        risk_obstacle_count=args.risk_obstacle_count,
+        risk_obstacle_radius_min=args.risk_obstacle_radius_min,
+        risk_obstacle_radius_max=args.risk_obstacle_radius_max,
         runs_dir=args.runs_dir,
         run_name=args.run_name,
     )
@@ -71,12 +101,20 @@ def main() -> int:
     metrics_path = run_dir / "metrics.csv"
 
     logger.info(
-        "Simulation start | seed=%s steps=%s dt=%s map=(%s,%s) run_dir=%s",
+        "Simulation start | seed=%s steps=%s dt=%s map=(%s,%s) base=(%s,%s) bands=(near:[0,%s],risk:[%s,%s],off:[%s,%s]) obstacles=%s run_dir=%s",
         config.seed,
         config.steps,
         config.dt,
         config.map_width,
         config.map_height,
+        config.base_x,
+        config.base_y,
+        config.nearshore_y_max,
+        config.risk_zone_y_min,
+        config.risk_zone_y_max,
+        config.offshore_y_min,
+        config.offshore_y_max,
+        config.risk_obstacle_count,
         run_dir,
     )
     logger.info("Config saved to %s", config_path)

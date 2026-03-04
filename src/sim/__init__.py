@@ -1,3 +1,3 @@
 """Simulation package skeleton."""
 
-__all__ = ["config", "run", "sim"]
+__all__ = ["config", "environment", "run", "sim"]

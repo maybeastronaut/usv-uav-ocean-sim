@@ -33,13 +33,25 @@ runs/<timestamp-uuid>/
 └── metrics.csv
 ```
 
-## 3. One-click smoke run
+## 3. Preview environment
+
+```bash
+python3 scripts/preview_environment.py --seed 0
+```
+
+This generates:
+
+```text
+runs/<timestamp-uuid>/environment_preview.png
+```
+
+## 4. One-click smoke run
 
 ```bash
 bash scripts/smoke_run.sh
 ```
 
-## 4. Test
+## 5. Test
 
 ```bash
 python3 -m pytest
